@@ -1,0 +1,237 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+
+/* ─── Custom Design Tokens ─────────────────────────────── */
+@theme {
+  --color-cyber-bg:        #050814;
+  --color-cyber-surface:   #0b1025;
+  --color-cyber-elevated:  #111827;
+  --color-cyber-border:    rgba(99, 179, 237, 0.12);
+
+  --color-cyber-cyan:      #22d3ee;
+  --color-cyber-blue:      #3b82f6;
+  --color-cyber-purple:    #a855f7;
+  --color-cyber-pink:      #f472b6;
+  --color-cyber-green:     #10b981;
+  --color-cyber-orange:    #f59e0b;
+  --color-cyber-red:       #ef4444;
+
+  --color-cyber-text:      #f1f5f9;
+  --color-cyber-muted:     #64748b;
+  --color-cyber-subtle:    #334155;
+
+  --font-sans: "Inter", "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", "Fira Code", ui-monospace, monospace;
+}
+
+/* ─── Base Reset ────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  background-color: #050814;
+  color: #f1f5f9;
+  font-family: var(--font-sans);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── Custom Scrollbar ──────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(99, 179, 237, 0.2);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(99, 179, 237, 0.4);
+}
+
+/* ─── React Flow Overrides ──────────────────────────────── */
+.react-flow {
+  background: transparent !important;
+}
+
+.react-flow__background {
+  background-color: transparent !important;
+}
+
+.react-flow__minimap {
+  background: rgba(11, 16, 37, 0.9) !important;
+  border: 1px solid rgba(99, 179, 237, 0.12) !important;
+  border-radius: 8px !important;
+  overflow: hidden;
+}
+
+.react-flow__minimap-mask {
+  fill: rgba(34, 211, 238, 0.08) !important;
+}
+
+.react-flow__minimap-node {
+  fill: rgba(34, 211, 238, 0.4) !important;
+  stroke: none !important;
+}
+
+.react-flow__controls {
+  background: rgba(11, 16, 37, 0.9) !important;
+  border: 1px solid rgba(99, 179, 237, 0.12) !important;
+  border-radius: 8px !important;
+  overflow: hidden;
+  box-shadow: none !important;
+}
+
+.react-flow__controls-button {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(99, 179, 237, 0.08) !important;
+  color: #64748b !important;
+  transition: color 0.15s, background 0.15s !important;
+}
+
+.react-flow__controls-button:hover {
+  background: rgba(34, 211, 238, 0.08) !important;
+  color: #22d3ee !important;
+}
+
+.react-flow__controls-button svg {
+  fill: currentColor !important;
+}
+
+.react-flow__edge-path {
+  stroke-width: 1.5px;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #22d3ee !important;
+}
+
+.react-flow__connection-line {
+  stroke: #22d3ee;
+  stroke-width: 1.5px;
+}
+
+.react-flow__handle {
+  width: 8px !important;
+  height: 8px !important;
+  background: #22d3ee !important;
+  border: 2px solid #0b1025 !important;
+  transition: transform 0.15s, box-shadow 0.15s !important;
+}
+
+.react-flow__handle:hover {
+  transform: scale(1.4) !important;
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.8) !important;
+}
+
+/* ─── Glassmorphism Utility ─────────────────────────────── */
+.glass {
+  background: rgba(11, 16, 37, 0.7);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  border: 1px solid rgba(99, 179, 237, 0.1);
+}
+
+.glass-elevated {
+  background: rgba(17, 24, 39, 0.8);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(99, 179, 237, 0.15);
+}
+
+/* ─── Glow Effects ──────────────────────────────────────── */
+.glow-cyan {
+  box-shadow: 0 0 20px rgba(34, 211, 238, 0.15), 0 0 40px rgba(34, 211, 238, 0.05);
+}
+
+.glow-purple {
+  box-shadow: 0 0 20px rgba(168, 85, 247, 0.15), 0 0 40px rgba(168, 85, 247, 0.05);
+}
+
+.text-glow-cyan {
+  text-shadow: 0 0 10px rgba(34, 211, 238, 0.6);
+}
+
+/* ─── Keyframe Animations ───────────────────────────────── */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; box-shadow: 0 0 6px currentColor; }
+  50%       { opacity: 0.6; box-shadow: 0 0 12px currentColor, 0 0 24px currentColor; }
+}
+
+@keyframes data-flow {
+  0%   { stroke-dashoffset: 100; opacity: 0.4; }
+  50%  { opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 0.4; }
+}
+
+@keyframes scan-line {
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-4px); }
+}
+
+@keyframes grid-fade {
+  0%   { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-shimmer {
+  background-size: 200% auto;
+  animation: shimmer 3s linear infinite;
+}
+
+/* ─── Grid Background ───────────────────────────────────── */
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(34, 211, 238, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 211, 238, 0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* ─── Agent Node Styles ─────────────────────────────────── */
+.agent-node-selected {
+  outline: 1px solid rgba(34, 211, 238, 0.6) !important;
+  outline-offset: 2px;
+}
+
+/* ─── Status Indicator ──────────────────────────────────── */
+.status-running {
+  animation: pulse-glow 1.5s ease-in-out infinite;
+  color: #22d3ee;
+}
+
+/* ─── Sidebar active ────────────────────────────────────── */
+.nav-item-active {
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.12), transparent);
+  border-left: 2px solid #22d3ee;
+  color: #22d3ee;
+}
