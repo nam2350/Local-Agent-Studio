@@ -183,12 +183,41 @@ function AgentRow({
   );
 }
 
+// ─── Tool call badge ──────────────────────────────────────────────────────────
+
+const TOOL_COLORS: Record<string, string> = {
+  web_search:  "#22d3ee",
+  calculator:  "#f59e0b",
+  read_file:   "#a855f7",
+};
+
+function ToolCallBadge({ tool, input, output }: { tool: string; input: Record<string, unknown>; output: string }) {
+  const color = TOOL_COLORS[tool] ?? "#64748b";
+  const inputStr = Object.values(input)[0]?.toString() ?? "";
+  return (
+    <div
+      className="my-2 rounded-md p-2 text-[9px] font-mono"
+      style={{ background: `${color}10`, border: `1px solid ${color}30` }}
+    >
+      <div className="flex items-center gap-1.5 mb-1">
+        <span className="font-bold uppercase" style={{ color }}>{tool.replace("_", " ")}</span>
+        <span className="text-cyber-subtle truncate max-w-[140px]">{inputStr}</span>
+      </div>
+      {output && (
+        <p className="text-cyber-muted leading-relaxed line-clamp-3">{output}</p>
+      )}
+    </div>
+  );
+}
+
 // ─── Output viewer ────────────────────────────────────────────────────────────
 
 function OutputPanel() {
   const { agentMetrics } = usePipeline();
   const [activeAgent, setActiveAgent] = useState("router-1");
-  const currentOutput = agentMetrics[activeAgent]?.output ?? "";
+  const currentMetrics = agentMetrics[activeAgent];
+  const currentOutput = currentMetrics?.output ?? "";
+  const toolCalls = currentMetrics?.toolCalls ?? [];
 
   return (
     <div className="flex flex-col gap-2">
@@ -196,6 +225,7 @@ function OutputPanel() {
         {AGENT_CONFIG.map((c) => {
           const m = agentMetrics[c.id];
           const hasOutput = m && m.output.length > 0;
+          const hasTools = m && m.toolCalls && m.toolCalls.length > 0;
           return (
             <button
               key={c.id}
@@ -217,10 +247,24 @@ function OutputPanel() {
                   style={{ background: c.color }}
                 />
               )}
+              {hasTools && (
+                <span className="ml-0.5 text-[8px]" style={{ color: "#22d3ee" }}>⚡</span>
+              )}
             </button>
           );
         })}
       </div>
+
+      {/* Tool calls for this agent */}
+      {toolCalls.length > 0 && (
+        <div>
+          <p className="text-[9px] text-cyber-muted uppercase tracking-widest mb-1">Tool Calls</p>
+          {toolCalls.map((tc, i) => (
+            <ToolCallBadge key={i} tool={tc.tool} input={tc.input} output={tc.output} />
+          ))}
+        </div>
+      )}
+
       <div
         className="rounded-lg p-2.5 min-h-[120px] max-h-[220px] overflow-y-auto"
         style={{

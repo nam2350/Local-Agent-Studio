@@ -84,6 +84,10 @@ venv.bak/
 backend/studio.db
 *.sqlite3
 
+# Local HF Model Weights (multi-GB)
+backend/models/*
+!backend/models/.gitkeep
+
 # IDEs / Editor
 .vscode/
 .idea/

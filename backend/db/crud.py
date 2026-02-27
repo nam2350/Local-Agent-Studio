@@ -66,3 +66,19 @@ def delete_pipeline(pipeline_id: int) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM pipelines WHERE id=?", (pipeline_id,))
         conn.commit()
+
+
+def list_agents() -> list[dict]:
+    """Retrieve all configurable agent templates from the registry."""
+    with get_connection() as conn:
+        rows = conn.execute("SELECT * FROM agent_registry ORDER BY role ASC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_agent(agent_id: str) -> dict | None:
+    """Retrieve a single agent template by its registry ID."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM agent_registry WHERE id = ?", (agent_id,)
+        ).fetchone()
+        return dict(row) if row else None

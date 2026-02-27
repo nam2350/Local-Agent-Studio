@@ -123,6 +123,7 @@ export default function NodeConfigPanel() {
     resetNodeConfig,
     providerStatus,
     availableModels,
+    registryAgents,
   } = usePipeline();
 
   if (!selectedNode) return null;
@@ -214,6 +215,47 @@ export default function NodeConfigPanel() {
           </div>
         ) : (
           <>
+            {/* ── SOTA Templates ───────────────────────────────────── */}
+            {registryAgents.length > 0 && (
+              <div className="mb-2">
+                <SectionLabel>SOTA Registry Templates</SectionLabel>
+                <div className="relative">
+                  <select
+                    onChange={(e) => {
+                      const agent = registryAgents.find((a) => a.id === e.target.value);
+                      if (agent) {
+                        patch({
+                          provider: agent.provider_type as ProviderType,
+                          modelId: agent.model_id,
+                          systemPrompt: agent.system_prompt,
+                          maxTokens: agent.max_tokens,
+                          temperature: agent.temperature,
+                        });
+                      }
+                      e.target.value = ""; // reset after selection
+                    }}
+                    value=""
+                    className="w-full appearance-none text-[11px] text-cyber-cyan font-mono px-2.5 py-2 pr-7 rounded-lg outline-none cursor-pointer hover:bg-white/[0.04] transition-colors"
+                    style={{
+                      background: "rgba(34,211,238,0.08)",
+                      border: "1px solid rgba(34,211,238,0.3)",
+                    }}
+                  >
+                    <option value="" disabled>Load from Registry...</option>
+                    {registryAgents.map((a) => (
+                      <option key={a.id} value={a.id} style={{ background: "#0b1025", color: "#e2e8f0" }}>
+                        {a.name} ({a.role})
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown
+                    size={11}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-cyber-cyan pointer-events-none"
+                  />
+                </div>
+              </div>
+            )}
+
             {/* ── Provider ─────────────────────────────────────────── */}
             <div>
               <SectionLabel>Provider</SectionLabel>

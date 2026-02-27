@@ -16,80 +16,44 @@ logger = logging.getLogger(__name__)
 
 # ─── Agent definitions ────────────────────────────────────────────────────────
 
-AGENTS = [
-    {
-        "id": "router-1",
-        "label": "Router",
-        "model": "Qwen2.5-3B-Instruct",
-        "hf_model": "Qwen/Qwen2.5-3B-Instruct",
-        "system_prompt": (
-            "You are a task routing system. Analyze the user request briefly. "
-            "Classify the task type, estimate complexity, and decide which specialist "
-            "agents are needed: 'coder-1' (for coding/programming), 'analyzer-1' (for architecture/security review).\n\n"
-            "CRITICAL: You MUST include a line exactly like this in your response:\n"
-            "[TARGET_AGENTS] coder-1, analyzer-1\n"
-            "If no specialists are needed (e.g. general chat), output: [TARGET_AGENTS] none"
-        ),
-        "tokensPerSec": 52.0,
-        "vramGb": 2.4,
-        "warmupSec": 0.4,
-    },
-    {
-        "id": "coder-1",
-        "label": "Code Writer",
-        "model": "Qwen2.5-Coder-7B",
-        "hf_model": "Qwen/Qwen2.5-Coder-7B-Instruct",
-        "system_prompt": (
-            "You are an expert programmer. Generate clean, working code for the task. "
-            "Include type hints and brief comments. Keep the implementation concise."
-        ),
-        "tokensPerSec": 34.0,
-        "vramGb": 5.1,
-        "warmupSec": 0.7,
-    },
-    {
-        "id": "analyzer-1",
-        "label": "Analyzer",
-        "model": "Gemma-3-4B-IT",
-        "hf_model": "google/gemma-3-4b-it",
-        "system_prompt": (
-            "You are a technical analyst. Review the task and any code provided. "
-            "Identify security issues, performance concerns, and give brief recommendations."
-        ),
-        "tokensPerSec": 41.0,
-        "vramGb": 3.1,
+def _get_agent(agent_id: str) -> dict:
+    from db import crud
+    agent_record = crud.get_agent(agent_id)
+    if not agent_record:
+        # Fallback for dynamic/custom nodes that might not be in the registry
+        return {
+            "id": agent_id,
+            "label": agent_id.capitalize(),
+            "model": "Qwen2.5-3B-Instruct",
+            "hf_model": "Qwen/Qwen2.5-3B-Instruct",
+            "system_prompt": "You are a helpful assistant.",
+            "tokensPerSec": 35.0,
+            "vramGb": 3.0,
+            "warmupSec": 0.5,
+        }
+    
+    return {
+        "id": agent_record["id"],
+        "label": agent_record["name"],
+        "model": agent_record["model_id"],
+        "hf_model": agent_record["model_id"],
+        "system_prompt": agent_record["system_prompt"],
+        "tokensPerSec": 35.0,
+        "vramGb": 3.0,
         "warmupSec": 0.5,
-    },
-    {
-        "id": "validator-1",
-        "label": "Validator",
-        "model": "Phi-4-mini-4B",
-        "hf_model": "microsoft/phi-4-mini-instruct",
-        "system_prompt": (
-            "You are a code quality expert. Score the provided code out of 100 for "
-            "quality and security. List top 3 issues. Give a final verdict: APPROVED or NEEDS_REVISION."
-        ),
-        "tokensPerSec": 58.0,
-        "vramGb": 3.3,
-        "warmupSec": 0.4,
-    },
-    {
-        "id": "synthesizer-1",
-        "label": "Synthesizer",
-        "model": "Llama-3.1-8B-Instruct",
-        "hf_model": "meta-llama/Llama-3.1-8B-Instruct",
-        "system_prompt": (
-            "You are a technical writer. Synthesize the outputs from all agents into "
-            "a clear final summary. Include: implementation overview, quality score, "
-            "top recommendations. Be concise."
-        ),
-        "tokensPerSec": 26.0,
-        "vramGb": 5.9,
-        "warmupSec": 0.8,
-    },
-]
+    }
 
-AGENTS_BY_ID = {a["id"]: a for a in AGENTS}
+
+class _AgentsByIdDict:
+    """A dictionary-like wrapper that lazy-loads agents from the SQLite DB."""
+    def __getitem__(self, key: str) -> dict:
+        return _get_agent(key)
+        
+    def __contains__(self, key: str) -> bool:
+        from db import crud
+        return crud.get_agent(key) is not None
+
+AGENTS_BY_ID = _AgentsByIdDict()
 
 # ─── DAG pipeline stages ──────────────────────────────────────────────────────
 # The pipeline is now dynamic. The hardcoded PIPELINE_STAGES logic below
@@ -270,10 +234,22 @@ def _resolve_provider(agent: dict, request: RunRequest) -> Optional[BaseProvider
     )
 
 
+_TOOL_SCHEMAS = {
+    "web_search": '{"name": "web_search", "arguments": {"query": "your search query"}}',
+    "calculator": '{"name": "calculator", "arguments": {"expression": "2 + 2 * 3"}}',
+    "read_file":  '{"name": "read_file", "arguments": {"path": "relative/file.txt"}}',
+}
+_TOOL_DESCRIPTIONS = {
+    "web_search": "Search the web for current/recent information (DuckDuckGo).",
+    "calculator": "Evaluate a math expression and return the numeric result.",
+    "read_file":  "Read a text file from the local workspace by relative path.",
+}
+
+
 def _resolve_system_prompt(agent: dict, request: RunRequest) -> str:
     base_prompt = agent.get("system_prompt", "")
-    active_tools = []
-    
+    active_tools: list[str] = []
+
     if request.agent_configs:
         cfg = next((c for c in request.agent_configs if c.agent_id == agent["id"]), None)
         if cfg:
@@ -282,15 +258,18 @@ def _resolve_system_prompt(agent: dict, request: RunRequest) -> str:
             if cfg.tools:
                 active_tools = cfg.tools
 
-    if "web_search" in active_tools:
+    if active_tools:
+        tool_lines = "\n".join(
+            f"- {t}: {_TOOL_DESCRIPTIONS.get(t, '')}  Example: {_TOOL_SCHEMAS.get(t, '')}"
+            for t in active_tools if t in _TOOL_SCHEMAS
+        )
         tools_addon = (
-            "\n\n[TOOLS]\nYou have access to the following tools if external/recent information is needed. "
-            "To use a tool, YOU MUST output ONLY a valid JSON object matching this schema, nothing else:\n"
-            '{"name": "web_search", "arguments": { "query": "your search query here" }}\n'
-            "If no tool is needed, output normal text."
+            "\n\n[TOOLS AVAILABLE]\nWhen you need external information, output ONLY a JSON object on its own line:\n"
+            f"{tool_lines}\n"
+            "Output normal text if no tool is needed."
         )
         base_prompt += tools_addon
-        
+
     return base_prompt
 
 
@@ -409,53 +388,84 @@ async def _run_single_agent(
         yield event_str
 
     # ── Tool Interception & Execution ──
-    # Check if the generated full_output is asking for a tool call JSON.
-    # Simple regex to catch json blocks or inline json.
-    tool_pattern = re.compile(r'\{\s*"name"\s*:\s*"web_search"\s*,\s*"arguments"\s*:\s*\{\s*"query"\s*:\s*"(.*?)"\s*\}\s*\}')
-    match = tool_pattern.search(full_output)
-    
-    if match and provider: # Execute tool if matched and running real models
-        query = match.group(1)
-        yield sse({
-            "type": "agent_token", 
-            "agentId": agent_id, 
-            "token": f"\n\n[SYSTEM: Executing Web Search for '{query}'...]\n\n",
-            "totalTokens": agent_tokens,
-            "tokensPerSec": 0
-        })
-        
-        # Actually run python tool
-        search_results = web_search(query)
-        
-        # Build new prompt
-        tool_prompt = f"{agent_input}\n\n[TOOL CALL RESULT for '{query} भी']:\n{search_results}\n\nNow, provide a final response strictly based on the tool results above."
-        
-        yield sse({
-            "type": "agent_token", 
-            "agentId": agent_id, 
-            "token": "[SYSTEM: Results received, generating final response...]\n\n",
-            "totalTokens": agent_tokens,
-            "tokensPerSec": 0
-        })
-        
-        # Second stream phase (Re-prompt with results)
-        added_output = ""
-        try:
-            async for token_text in provider.generate(
-                prompt=tool_prompt,
-                system_prompt=_resolve_system_prompt(agent, request),
-                max_tokens=_resolve_max_tokens(agent, request),
-                temperature=_resolve_temperature(agent, request),
-            ):
-                added_output += token_text
-                agent_tokens += max(1, len(token_text.split()))
-                elapsed = time.time() - agent_start_t
-                tps = round(agent_tokens / elapsed, 1) if elapsed > 0 else 0
-                yield sse({"type": "agent_token", "agentId": agent_id, "token": token_text, "totalTokens": agent_tokens, "tokensPerSec": tps})
-            
-            full_output += f"\n\n[Search Results Used] \n" + added_output
-        except Exception as e:
-            logger.warning(f"[{agent_id}] Re-prompting failed: {e}")
+    # Detect any tool call JSON in the output (any of the 3 supported tools).
+    # Pattern: {"name": "tool_name", "arguments": {...}}
+    tool_json_pattern = re.compile(
+        r'\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[^}]*\})\s*\}',
+        re.DOTALL
+    )
+    tool_match = tool_json_pattern.search(full_output)
+
+    # Resolve which tools are enabled for this agent
+    active_tools: list[str] = []
+    if request.agent_configs:
+        cfg = next((c for c in request.agent_configs if c.agent_id == agent_id), None)
+        if cfg and cfg.tools:
+            active_tools = cfg.tools
+
+    if tool_match and (provider or active_tools):
+        tool_name = tool_match.group(1)
+        args_str   = tool_match.group(2)
+
+        if tool_name in (active_tools or ["web_search", "calculator", "read_file"]):
+            try:
+                tool_args = json.loads(args_str)
+            except json.JSONDecodeError:
+                tool_args = {}
+
+            yield sse({
+                "type": "tool_call",
+                "agentId": agent_id,
+                "tool": tool_name,
+                "input": tool_args,
+            })
+
+            # Execute the tool
+            if tool_name == "web_search":
+                tool_result = web_search(tool_args.get("query", ""))
+            else:
+                from tools.executor import execute_tool
+                tool_result = execute_tool(tool_name, tool_args)
+
+            yield sse({
+                "type": "tool_result",
+                "agentId": agent_id,
+                "tool": tool_name,
+                "output": tool_result[:500],
+            })
+
+            # Notify user via token stream
+            yield sse({
+                "type": "agent_token",
+                "agentId": agent_id,
+                "token": f"\n\n[{tool_name.upper()} RESULT]\n{tool_result[:400]}\n\n",
+                "totalTokens": agent_tokens,
+                "tokensPerSec": 0,
+            })
+
+            # ── Second pass: re-prompt with tool result ──
+            if provider:
+                tool_prompt = (
+                    f"{agent_input}\n\n"
+                    f"[TOOL RESULT for {tool_name}({args_str})]:\n{tool_result}\n\n"
+                    "Now provide your final answer based on the tool result above."
+                )
+                added_output = ""
+                try:
+                    async for token_text in provider.generate(
+                        prompt=tool_prompt,
+                        system_prompt=agent.get("system_prompt", ""),
+                        max_tokens=_resolve_max_tokens(agent, request),
+                        temperature=_resolve_temperature(agent, request),
+                    ):
+                        added_output += token_text
+                        agent_tokens += max(1, len(token_text.split()))
+                        elapsed = time.time() - agent_start_t
+                        tps = round(agent_tokens / elapsed, 1) if elapsed > 0 else 0
+                        yield sse({"type": "agent_token", "agentId": agent_id, "token": token_text, "totalTokens": agent_tokens, "tokensPerSec": tps})
+                    full_output += "\n\n[Tool Result Applied]\n" + added_output
+                except Exception as e:
+                    logger.warning(f"[{agent_id}] Re-prompting after tool call failed: {e}")
 
     # Store output BEFORE yielding agent_done
     previous_outputs[agent_id] = full_output

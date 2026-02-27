@@ -19,6 +19,13 @@ export type ProviderType = "simulation" | "ollama" | "lmstudio" | "llamacpp" | "
 
 export type { NodeConfig };
 
+export type ToolCallEvent = {
+  tool: string;
+  input: Record<string, unknown>;
+  output: string;
+  agentId: string;
+};
+
 export type AgentMetrics = {
   status: AgentStatus;
   tokens: number;
@@ -27,6 +34,7 @@ export type AgentMetrics = {
   vramGb: number;
   output: string;
   provider: ProviderType;
+  toolCalls: ToolCallEvent[];
 };
 
 export type ParallelStageInfo = {
@@ -61,6 +69,7 @@ type PipelineState = {
   selectedNode: SelectedNodeInfo;
   nodeConfigs: Record<string, NodeConfig>;
   activeParallelStage: ParallelStageInfo;
+  registryAgents: any[];
 };
 
 type PipelineContextValue = PipelineState & {
@@ -85,7 +94,7 @@ function defaultMetrics(): Record<string, AgentMetrics> {
   return Object.fromEntries(
     DEFAULT_AGENT_IDS.map((id) => [
       id,
-      { status: "idle", tokens: 0, tokensPerSec: 0, latencyMs: 0, vramGb: 0, output: "", provider: "simulation" as ProviderType },
+      { status: "idle", tokens: 0, tokensPerSec: 0, latencyMs: 0, vramGb: 0, output: "", provider: "simulation" as ProviderType, toolCalls: [] },
     ])
   );
 }
@@ -114,6 +123,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     selectedNode: null,
     nodeConfigs: {},
     activeParallelStage: null,
+    registryAgents: [],
   });
 
   const abortRef = useRef<AbortController | null>(null);
@@ -123,12 +133,14 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        const [provRes, modRes] = await Promise.all([
+        const [provRes, modRes, regRes] = await Promise.all([
           fetch(`${BACKEND}/api/providers`, { signal: AbortSignal.timeout(4000) }),
           fetch(`${BACKEND}/api/models`, { signal: AbortSignal.timeout(4000) }),
+          fetch(`${BACKEND}/api/registry/agents`, { signal: AbortSignal.timeout(4000) }),
         ]);
         const provData = provRes.ok ? await provRes.json() : null;
         const modData = modRes.ok ? await modRes.json() : null;
+        const regData = regRes.ok ? await regRes.json() : null;
 
         setState((s) => ({
           ...s,
@@ -141,6 +153,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
             },
           }),
           ...(modData && { availableModels: modData.models ?? {} }),
+          ...(regData && { registryAgents: regData.agents ?? [] }),
         }));
       } catch {
         // backend offline
@@ -264,15 +277,49 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
               ...s.agentMetrics[event.agentId as string],
               status: "running",
               provider: (event.provider as ProviderType) ?? "simulation",
+              toolCalls: [],
             },
           },
         }));
         break;
 
+      case "tool_call":
+        setState((s) => {
+          const id = event.agentId as string;
+          const prev = s.agentMetrics[id] ?? { status: "running", tokens: 0, tokensPerSec: 0, latencyMs: 0, vramGb: 0, output: "", provider: "simulation" as ProviderType, toolCalls: [] };
+          return {
+            ...s,
+            agentMetrics: {
+              ...s.agentMetrics,
+              [id]: {
+                ...prev,
+                toolCalls: [
+                  ...prev.toolCalls,
+                  { tool: event.tool as string, input: (event.input as Record<string, unknown>) ?? {}, output: "", agentId: id },
+                ],
+              },
+            },
+          };
+        });
+        break;
+
+      case "tool_result":
+        setState((s) => {
+          const id = event.agentId as string;
+          const prev = s.agentMetrics[id];
+          if (!prev) return s;
+          const toolName = event.tool as string;
+          const updatedCalls = prev.toolCalls.map((tc) =>
+            tc.tool === toolName && tc.output === "" ? { ...tc, output: (event.output as string) ?? "" } : tc
+          );
+          return { ...s, agentMetrics: { ...s.agentMetrics, [id]: { ...prev, toolCalls: updatedCalls } } };
+        });
+        break;
+
       case "agent_token":
         setState((s) => {
           const id = event.agentId as string;
-          const prev = s.agentMetrics[id] ?? { status: "running", tokens: 0, tokensPerSec: 0, latencyMs: 0, vramGb: 0, output: "", provider: "simulation" as ProviderType };
+          const prev = s.agentMetrics[id] ?? { status: "running", tokens: 0, tokensPerSec: 0, latencyMs: 0, vramGb: 0, output: "", provider: "simulation" as ProviderType, toolCalls: [] };
           return {
             ...s,
             agentMetrics: {

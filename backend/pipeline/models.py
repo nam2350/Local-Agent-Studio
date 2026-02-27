@@ -33,6 +33,9 @@ class PipelineEvent(BaseModel):
         "agent_token",
         "agent_vram",
         "agent_done",
+        "tool_call",
+        "tool_result",
+        "stage_parallel",
         "pipeline_done",
         "pipeline_error",
     ]
@@ -50,3 +53,10 @@ class PipelineEvent(BaseModel):
     totalPipelineMs: Optional[int] = None
     prompt: Optional[str] = None
     message: Optional[str] = None
+    # Tool calling fields
+    tool: Optional[str] = None
+    input: Optional[dict] = None
+    output: Optional[str] = None
+    # Stage info
+    stageIndex: Optional[int] = None
+    agentIds: Optional[List[str]] = None

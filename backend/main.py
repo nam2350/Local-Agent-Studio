@@ -1,12 +1,21 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pipeline.models import RunRequest
 from pipeline.orchestrator import run_pipeline
 from providers.registry import registry
+from db import crud, database
 from pydantic import BaseModel
+from typing import Any
+from pathlib import Path
 import asyncio
 import json
+
+# 로컬 모델 저장 경로 (HF 캐시 미사용)
+MODELS_DIR = Path(__file__).parent / "models"
+
+# Ensure SQLite tables exist and default agents are seeded on startup
+database.init_db()
 
 app = FastAPI(title="Local Agent Studio API", version="0.2.0")
 
@@ -46,28 +55,92 @@ async def get_models():
     return {"models": models}
 
 
+@app.get("/api/registry/agents")
+def get_registry_agents():
+    """List all SOTA configurable agent templates from SQLite registry."""
+    agents = crud.list_agents()
+    return {"agents": agents}
+
+
+# ─── Pipeline CRUD ────────────────────────────────────────────────────────────
+
+class PipelineSaveRequest(BaseModel):
+    name: str
+    description: str = ""
+    nodes: list[Any] = []
+    edges: list[Any] = []
+    node_configs: dict[str, Any] = {}
+
+
+@app.get("/api/pipelines")
+def list_pipelines():
+    """List all saved pipeline presets."""
+    return {"pipelines": crud.list_pipelines()}
+
+
+@app.post("/api/pipelines", status_code=201)
+def create_pipeline(body: PipelineSaveRequest):
+    """Save a new pipeline preset."""
+    pid = crud.create_pipeline(
+        body.name, body.description, body.nodes, body.edges, body.node_configs
+    )
+    return {"id": pid}
+
+
+@app.get("/api/pipelines/{pipeline_id}")
+def get_pipeline(pipeline_id: int):
+    """Load a pipeline preset by ID."""
+    row = crud.get_pipeline(pipeline_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    return row
+
+
+@app.put("/api/pipelines/{pipeline_id}")
+def update_pipeline(pipeline_id: int, body: PipelineSaveRequest):
+    """Update an existing pipeline preset."""
+    row = crud.get_pipeline(pipeline_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    crud.update_pipeline(
+        pipeline_id, body.name, body.description, body.nodes, body.edges, body.node_configs
+    )
+    return {"ok": True}
+
+
+@app.delete("/api/pipelines/{pipeline_id}")
+def delete_pipeline(pipeline_id: int):
+    """Delete a pipeline preset."""
+    crud.delete_pipeline(pipeline_id)
+    return {"ok": True}
+
+
+# ─── Model Download ───────────────────────────────────────────────────────────
+
 class DownloadRequest(BaseModel):
     model_id: str
 
 
 @app.get("/api/models/local")
 async def get_local_models():
-    """List locally cached HuggingFace models."""
-    try:
-        from huggingface_hub import scan_cache_dir
-        cache_info = scan_cache_dir()
-        models = [
-            {
-                "model_id": repo.repo_id,
-                "size":     repo.size_on_disk,
-                "size_str": repo.size_on_disk_str,
-                "nb_files": repo.nb_files,
-            }
-            for repo in sorted(cache_info.repos, key=lambda r: r.repo_id)
-        ]
-        return {"models": models}
-    except Exception as e:
-        return {"models": [], "error": str(e)}
+    """List locally downloaded models from backend/models/ directory."""
+    models = []
+    if MODELS_DIR.exists():
+        for child in sorted(MODELS_DIR.iterdir()):
+            if child.is_dir() and child.name != "__pycache__" and not child.name.startswith("."):
+                # 폴더명: org--model-name → org/model-name
+                hf_id = child.name.replace("--", "/", 1)
+                total_size = sum(f.stat().st_size for f in child.rglob("*") if f.is_file())
+                nb_files = sum(1 for f in child.rglob("*") if f.is_file())
+                size_gb = round(total_size / (1024**3), 2)
+                models.append({
+                    "model_id": hf_id,
+                    "local_path": str(child),
+                    "size": total_size,
+                    "size_str": f"{size_gb} GB",
+                    "nb_files": nb_files,
+                })
+    return {"models": models}
 
 
 @app.post("/api/models/download")
@@ -116,9 +189,13 @@ async def download_model(body: DownloadRequest, req: Request):
                 "totalFiles": len(essential),
                 "pct": round(i / len(essential) * 100, 1),
             })
+            # 모델을 로컬 backend/models/<org--name>/ 에 직접 저장
+            local_dir = MODELS_DIR / model_id.replace("/", "--")
             try:
                 await loop.run_in_executor(
-                    None, lambda f=filename: hf_hub_download(model_id, f)
+                    None, lambda f=filename: hf_hub_download(
+                        model_id, f, local_dir=str(local_dir)
+                    )
                 )
                 downloaded += 1
             except Exception as e:
