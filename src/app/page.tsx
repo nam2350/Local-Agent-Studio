@@ -1,4 +1,5 @@
 import { PipelineProvider } from "@/context/PipelineContext";
+import { CanvasBridgeProvider } from "@/context/CanvasBridgeContext";
 import Sidebar from "@/components/layout/Sidebar";
 import TopBar from "@/components/layout/TopBar";
 import RightPanel from "@/components/layout/RightPanel";
@@ -6,6 +7,7 @@ import ClientCanvas from "@/components/canvas/ClientCanvas";
 
 export default function Home() {
   return (
+    <CanvasBridgeProvider>
     <PipelineProvider>
       <div
         className="flex flex-col w-screen h-screen overflow-hidden"
@@ -51,5 +53,6 @@ export default function Home() {
         </div>
       </div>
     </PipelineProvider>
+    </CanvasBridgeProvider>
   );
 }

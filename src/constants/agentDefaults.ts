@@ -10,6 +10,9 @@ export type NodeConfig = {
   systemPrompt: string;
   maxTokens: number;
   temperature: number;
+  tools?: {
+    web_search?: boolean;
+  };
 };
 
 // ─── Per-agentType defaults ───────────────────────────────────────────────────

@@ -42,7 +42,50 @@ next-env.d.ts
 
 # AI agent
 .claude
-.agent
+.agents
 
-# PRD
+# Documents
 PROJECT_PRD.md
+Agent.md
+CLAUDE.md
+
+# Python / Backend
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# SQLite Database
+backend/studio.db
+*.sqlite3
+
+# IDEs / Editor
+.vscode/
+.idea/
+*.swp
+*.swo

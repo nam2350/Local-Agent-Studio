@@ -20,6 +20,7 @@ import {
 } from "@xyflow/react";
 import { motion } from "framer-motion";
 import { usePipeline } from "@/context/PipelineContext";
+import { useCanvasBridge } from "@/context/CanvasBridgeContext";
 import AgentNode, { type AgentNodeData } from "./AgentNode";
 import type { AgentType } from "@/constants/agentDefaults";
 
@@ -111,7 +112,15 @@ function CanvasInner() {
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const { agentMetrics, status, setSelectedNode } = usePipeline();
   const { screenToFlowPosition } = useReactFlow();
+  const { getStateRef, setStateRef } = useCanvasBridge();
   const nodeCounter = useRef(100);
+
+  // ── Register canvas bridge callbacks ─────────────────────────────────────
+  getStateRef.current = () => ({ nodes, edges });
+  setStateRef.current = (newNodes: Node[], newEdges: Edge[]) => {
+    setNodes(newNodes as AgentFlowNode[]);
+    setEdges(newEdges);
+  };
 
   // ── Sync node data with pipeline metrics ──────────────────────────────────
   useEffect(() => {

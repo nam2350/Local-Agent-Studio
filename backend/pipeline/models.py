@@ -16,6 +16,7 @@ class AgentRunConfig(BaseModel):
     system_prompt: Optional[str] = None
     max_tokens: int = 512
     temperature: float = 0.7
+    tools: Optional[List[str]] = None   # e.g. ["web_search", "calculator"]
 
 
 class RunRequest(BaseModel):

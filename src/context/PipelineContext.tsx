@@ -125,18 +125,18 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       try {
         const [provRes, modRes] = await Promise.all([
           fetch(`${BACKEND}/api/providers`, { signal: AbortSignal.timeout(4000) }),
-          fetch(`${BACKEND}/api/models`,    { signal: AbortSignal.timeout(4000) }),
+          fetch(`${BACKEND}/api/models`, { signal: AbortSignal.timeout(4000) }),
         ]);
         const provData = provRes.ok ? await provRes.json() : null;
-        const modData  = modRes.ok  ? await modRes.json()  : null;
+        const modData = modRes.ok ? await modRes.json() : null;
 
         setState((s) => ({
           ...s,
           ...(provData && {
             providerStatus: {
-              ollama:       provData.providers?.ollama       ?? false,
-              lmstudio:     provData.providers?.lmstudio     ?? false,
-              llamacpp:     provData.providers?.llamacpp     ?? false,
+              ollama: provData.providers?.ollama ?? false,
+              lmstudio: provData.providers?.lmstudio ?? false,
+              llamacpp: provData.providers?.llamacpp ?? false,
               transformers: provData.providers?.transformers ?? false,
             },
           }),
@@ -154,8 +154,8 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   // ── Setters ───────────────────────────────────────────────────────────────
   const setPrompt = useCallback((p: string) => setState((s) => ({ ...s, prompt: p })), []);
   const setUseRealModels = useCallback((v: boolean) => setState((s) => ({ ...s, useRealModels: v })), []);
-  const setProviderType  = useCallback((p: ProviderType) => setState((s) => ({ ...s, providerType: p })), []);
-  const setSelectedNode  = useCallback((info: SelectedNodeInfo) => setState((s) => ({ ...s, selectedNode: info })), []);
+  const setProviderType = useCallback((p: ProviderType) => setState((s) => ({ ...s, providerType: p })), []);
+  const setSelectedNode = useCallback((info: SelectedNodeInfo) => setState((s) => ({ ...s, selectedNode: info })), []);
 
   const setNodeConfig = useCallback((nodeId: string, patch: Partial<NodeConfig>) => {
     setState((s) => ({
@@ -192,16 +192,22 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     }));
 
     // Build agent_configs from nodeConfigs
-    const agentConfigs = Object.entries(state.nodeConfigs).map(([agentId, cfg]) => ({
-      agent_id: agentId,
-      provider: {
-        type: cfg.provider,
-        model_id: cfg.modelId || undefined,
-      },
-      system_prompt: cfg.systemPrompt || undefined,
-      max_tokens: cfg.maxTokens,
-      temperature: cfg.temperature,
-    }));
+    const agentConfigs = Object.entries(state.nodeConfigs).map(([agentId, cfg]) => {
+      const activeTools: string[] = [];
+      if (cfg.tools?.web_search) activeTools.push("web_search");
+
+      return {
+        agent_id: agentId,
+        provider: {
+          type: cfg.provider,
+          model_id: cfg.modelId || undefined,
+        },
+        system_prompt: cfg.systemPrompt || undefined,
+        max_tokens: cfg.maxTokens,
+        temperature: cfg.temperature,
+        tools: activeTools.length > 0 ? activeTools : undefined,
+      };
+    });
 
     try {
       const response = await fetch(`${BACKEND}/api/run`, {
@@ -244,7 +250,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         error: `Connection failed: ${msg}. Is the backend running?`,
       }));
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.prompt, state.useRealModels, state.providerType, state.nodeConfigs]);
 
   const handleEvent = useCallback((event: Record<string, unknown>) => {

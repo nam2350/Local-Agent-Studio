@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import {
   ArrowLeft, RotateCcw, Cpu, Thermometer, Hash,
   GitBranch, Code2, FlaskConical, Layers, ShieldCheck,
-  MessageSquare, Sparkles, ChevronDown,
+  MessageSquare, Sparkles, ChevronDown, Globe,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePipeline, type ProviderType } from "@/context/PipelineContext";
@@ -14,35 +14,35 @@ import { getDefaultConfig, type AgentType, type NodeConfig } from "@/constants/a
 // ─── Agent type config ────────────────────────────────────────────────────────
 
 const AGENT_ICONS: Record<AgentType, React.FC<{ size?: number; color?: string }>> = {
-  router:      GitBranch,
-  coder:       Code2,
-  analyzer:    FlaskConical,
+  router: GitBranch,
+  coder: Code2,
+  analyzer: FlaskConical,
   synthesizer: Layers,
-  validator:   ShieldCheck,
-  input:       MessageSquare,
-  output:      Sparkles,
-  custom:      Cpu,
+  validator: ShieldCheck,
+  input: MessageSquare,
+  output: Sparkles,
+  custom: Cpu,
 };
 
 const AGENT_COLORS: Record<AgentType, string> = {
-  router:      "#22d3ee",
-  coder:       "#a855f7",
-  analyzer:    "#f472b6",
+  router: "#22d3ee",
+  coder: "#a855f7",
+  analyzer: "#f472b6",
   synthesizer: "#10b981",
-  validator:   "#f59e0b",
-  input:       "#3b82f6",
-  output:      "#10b981",
-  custom:      "#64748b",
+  validator: "#f59e0b",
+  input: "#3b82f6",
+  output: "#10b981",
+  custom: "#64748b",
 };
 
 // ─── Provider options ─────────────────────────────────────────────────────────
 
 const PROVIDERS: { value: ProviderType; label: string; color: string }[] = [
-  { value: "simulation",   label: "Simulation",    color: "#64748b" },
-  { value: "ollama",       label: "Ollama",         color: "#22d3ee" },
-  { value: "lmstudio",     label: "LM Studio",      color: "#a855f7" },
-  { value: "llamacpp",     label: "llama.cpp",      color: "#f59e0b" },
-  { value: "transformers", label: "HF Transformers",color: "#10b981" },
+  { value: "simulation", label: "Simulation", color: "#64748b" },
+  { value: "ollama", label: "Ollama", color: "#22d3ee" },
+  { value: "lmstudio", label: "LM Studio", color: "#a855f7" },
+  { value: "llamacpp", label: "llama.cpp", color: "#f59e0b" },
+  { value: "transformers", label: "HF Transformers", color: "#10b981" },
 ];
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -129,7 +129,7 @@ export default function NodeConfigPanel() {
 
   const { id: nodeId, label, agentType } = selectedNode;
   const color = AGENT_COLORS[agentType] ?? "#64748b";
-  const Icon  = AGENT_ICONS[agentType]  ?? Cpu;
+  const Icon = AGENT_ICONS[agentType] ?? Cpu;
   const defaults = getDefaultConfig(nodeId, agentType);
   const config: NodeConfig = { ...defaults, ...nodeConfigs[nodeId] };
 
@@ -142,13 +142,13 @@ export default function NodeConfigPanel() {
 
   // Model options depending on provider
   const modelOptions: string[] = useMemo(() => {
-    if (config.provider === "ollama")   return availableModels.ollama   ?? [];
+    if (config.provider === "ollama") return availableModels.ollama ?? [];
     if (config.provider === "lmstudio") return availableModels.lmstudio ?? [];
     return [];
   }, [config.provider, availableModels]);
 
   const providerOnline = (p: ProviderType): boolean => {
-    if (p === "simulation")   return true;
+    if (p === "simulation") return true;
     if (p === "transformers") return providerStatus.transformers;
     return providerStatus[p as keyof typeof providerStatus] ?? false;
   };
@@ -219,7 +219,7 @@ export default function NodeConfigPanel() {
               <SectionLabel>Provider</SectionLabel>
               <div className="flex flex-col gap-1">
                 {PROVIDERS.map((p) => {
-                  const online   = providerOnline(p.value);
+                  const online = providerOnline(p.value);
                   const selected = config.provider === p.value;
                   return (
                     <button
@@ -351,6 +351,49 @@ export default function NodeConfigPanel() {
               color={color}
             />
 
+            {/* ── Tools (Phase 7 / 9) ───────────────────────────────── */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <SectionLabel>External Tools</SectionLabel>
+              </div>
+
+              <div
+                className="flex items-center justify-between p-2.5 rounded-lg transition-colors cursor-pointer"
+                style={{
+                  background: config.tools?.web_search ? "rgba(34, 211, 238, 0.08)" : "rgba(255, 255, 255, 0.02)",
+                  border: config.tools?.web_search ? "1px solid rgba(34, 211, 238, 0.3)" : "1px solid rgba(255, 255, 255, 0.06)",
+                }}
+                onClick={() => patch({ tools: { ...config.tools, web_search: !config.tools?.web_search } })}
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className={cn(
+                    "p-1.5 rounded-md transition-colors",
+                    config.tools?.web_search ? "bg-cyber-cyan/20 text-cyber-cyan" : "bg-white/5 text-cyber-muted"
+                  )}>
+                    <Globe size={14} />
+                  </div>
+                  <div className="flex flex-col">
+                    <span className={cn("text-xs font-semibold", config.tools?.web_search ? "text-cyber-cyan" : "text-cyber-text")}>
+                      Web Search
+                    </span>
+                    <span className="text-[9px] text-cyber-subtle">DuckDuckGo live indexing</span>
+                  </div>
+                </div>
+
+                {/* Switch Toggle Anim */}
+                <div className={cn(
+                  "relative w-7 h-4 rounded-full transition-colors duration-200 ease-in-out",
+                  config.tools?.web_search ? "bg-cyber-cyan" : "bg-white/10"
+                )}>
+                  <motion.div
+                    initial={false}
+                    animate={{ x: config.tools?.web_search ? 12 : 2 }}
+                    className="absolute top-0.5 w-3 h-3 bg-white rounded-full shadow-sm"
+                  />
+                </div>
+              </div>
+            </div>
+
             {/* ── Config summary ────────────────────────────────────── */}
             <div
               className="rounded-lg p-2.5 mt-auto"
@@ -367,9 +410,9 @@ export default function NodeConfigPanel() {
               </div>
               {[
                 { label: "Provider", value: config.provider },
-                { label: "Model",    value: config.modelId || "—" },
-                { label: "Tokens",   value: `max ${config.maxTokens}` },
-                { label: "Temp",     value: config.temperature.toFixed(2) },
+                { label: "Model", value: config.modelId || "—" },
+                { label: "Tokens", value: `max ${config.maxTokens}` },
+                { label: "Temp", value: config.temperature.toFixed(2) },
               ].map(({ label: l, value: v }) => (
                 <div
                   key={l}

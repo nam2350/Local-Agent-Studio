@@ -27,6 +27,7 @@ import {
   X,
   RefreshCw,
   Package,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePipeline, type AgentMetrics, type ProviderType } from "@/context/PipelineContext";
@@ -473,6 +474,230 @@ function ModelDownloadPanel() {
   );
 }
 
+// ─── Metrics Dashboard panel ──────────────────────────────────────────────────
+
+function MetricsPanel() {
+  const { agentMetrics, status, totalMs } = usePipeline();
+
+  // Build sorted data for agents that have run
+  const agentData = AGENT_CONFIG.map((cfg) => {
+    const m = agentMetrics[cfg.id];
+    return {
+      ...cfg,
+      latencyMs:    m?.latencyMs    ?? 0,
+      tokensPerSec: m?.tokensPerSec ?? 0,
+      tokens:       m?.tokens       ?? 0,
+      status:       m?.status       ?? "idle",
+    };
+  }).filter((a) => a.latencyMs > 0 || a.tokensPerSec > 0 || a.tokens > 0);
+
+  const hasData = agentData.length > 0;
+  const maxLatency    = Math.max(...agentData.map((a) => a.latencyMs),    1);
+  const maxTokensSec  = Math.max(...agentData.map((a) => a.tokensPerSec), 1);
+  const maxTokens     = Math.max(...agentData.map((a) => a.tokens),       1);
+
+  // Bottleneck: agent with highest latency among "done" ones
+  const doneAgents = agentData.filter((a) => a.status === "done");
+  const bottleneck  = doneAgents.length > 0
+    ? doneAgents.reduce((a, b) => (a.latencyMs > b.latencyMs ? a : b))
+    : null;
+
+  if (!hasData) {
+    return (
+      <div className="flex flex-col items-center justify-center py-10 gap-2">
+        <BarChart2 size={22} className="text-cyber-subtle" />
+        <p className="text-xs text-cyber-subtle">Run a pipeline to see metrics</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Bottleneck alert */}
+      {bottleneck && (
+        <motion.div
+          initial={{ opacity: 0, y: -4 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-lg px-3 py-2.5 flex items-start gap-2"
+          style={{
+            background: "rgba(245,158,11,0.06)",
+            border: "1px solid rgba(245,158,11,0.2)",
+          }}
+        >
+          <AlertTriangle size={11} className="text-cyber-orange flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-[10px] font-semibold text-cyber-orange">Bottleneck Detected</p>
+            <p className="text-[9px] text-cyber-muted mt-0.5">
+              <span style={{ color: bottleneck.color }}>{bottleneck.label}</span>
+              {" "}took {(bottleneck.latencyMs / 1000).toFixed(1)}s
+              {totalMs > 0 && (
+                <> · {((bottleneck.latencyMs / totalMs) * 100).toFixed(0)}% of total</>
+              )}
+            </p>
+          </div>
+        </motion.div>
+      )}
+
+      {/* Latency chart */}
+      <div
+        className="rounded-lg p-3"
+        style={{ background: "rgba(11,16,37,0.5)", border: "1px solid rgba(255,255,255,0.05)" }}
+      >
+        <div className="flex items-center gap-1.5 mb-2.5">
+          <Clock size={9} className="text-cyber-muted" />
+          <span className="text-[10px] text-cyber-muted font-medium">Latency (s)</span>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          {agentData.filter((a) => a.latencyMs > 0).map((a) => {
+            const pct = (a.latencyMs / maxLatency) * 100;
+            const isBottleneck = bottleneck?.id === a.id;
+            return (
+              <div key={a.id}>
+                <div className="flex items-center justify-between mb-0.5">
+                  <span className="text-[9px] text-cyber-muted">{a.label}</span>
+                  <span
+                    className="text-[9px] font-mono"
+                    style={{ color: isBottleneck ? "#f59e0b" : a.color }}
+                  >
+                    {(a.latencyMs / 1000).toFixed(2)}s
+                    {isBottleneck && " ⚠"}
+                  </span>
+                </div>
+                <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                  <motion.div
+                    className="h-full rounded-full"
+                    style={{
+                      background: isBottleneck
+                        ? "linear-gradient(90deg, #f59e0b80, #f59e0b)"
+                        : `linear-gradient(90deg, ${a.color}60, ${a.color})`,
+                    }}
+                    initial={{ width: 0 }}
+                    animate={{ width: `${pct}%` }}
+                    transition={{ duration: 0.5, ease: "easeOut" }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Tokens/s chart */}
+      <div
+        className="rounded-lg p-3"
+        style={{ background: "rgba(11,16,37,0.5)", border: "1px solid rgba(255,255,255,0.05)" }}
+      >
+        <div className="flex items-center gap-1.5 mb-2.5">
+          <Zap size={9} className="text-cyber-cyan" />
+          <span className="text-[10px] text-cyber-muted font-medium">Tokens / sec</span>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          {agentData.filter((a) => a.tokensPerSec > 0).map((a) => {
+            const pct = (a.tokensPerSec / maxTokensSec) * 100;
+            return (
+              <div key={a.id}>
+                <div className="flex items-center justify-between mb-0.5">
+                  <span className="text-[9px] text-cyber-muted">{a.label}</span>
+                  <span className="text-[9px] font-mono" style={{ color: a.color }}>
+                    {a.tokensPerSec.toFixed(1)} T/s
+                  </span>
+                </div>
+                <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                  <motion.div
+                    className="h-full rounded-full"
+                    style={{ background: `linear-gradient(90deg, ${a.color}60, ${a.color})` }}
+                    initial={{ width: 0 }}
+                    animate={{ width: `${pct}%` }}
+                    transition={{ duration: 0.5, ease: "easeOut", delay: 0.1 }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Token counts */}
+      <div
+        className="rounded-lg p-3"
+        style={{ background: "rgba(11,16,37,0.5)", border: "1px solid rgba(255,255,255,0.05)" }}
+      >
+        <div className="flex items-center gap-1.5 mb-2.5">
+          <MessageSquare size={9} className="text-cyber-purple" />
+          <span className="text-[10px] text-cyber-muted font-medium">Token Output</span>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          {agentData.filter((a) => a.tokens > 0).map((a) => {
+            const pct = (a.tokens / maxTokens) * 100;
+            return (
+              <div key={a.id}>
+                <div className="flex items-center justify-between mb-0.5">
+                  <span className="text-[9px] text-cyber-muted">{a.label}</span>
+                  <span className="text-[9px] font-mono" style={{ color: a.color }}>
+                    {a.tokens.toLocaleString()} tok
+                  </span>
+                </div>
+                <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                  <motion.div
+                    className="h-full rounded-full"
+                    style={{ background: `linear-gradient(90deg, ${a.color}60, ${a.color})` }}
+                    initial={{ width: 0 }}
+                    animate={{ width: `${pct}%` }}
+                    transition={{ duration: 0.5, ease: "easeOut", delay: 0.2 }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Pipeline timeline */}
+      {totalMs > 0 && agentData.some((a) => a.latencyMs > 0) && (
+        <div
+          className="rounded-lg p-3"
+          style={{ background: "rgba(11,16,37,0.5)", border: "1px solid rgba(255,255,255,0.05)" }}
+        >
+          <div className="flex items-center justify-between mb-2.5">
+            <div className="flex items-center gap-1.5">
+              <TrendingUp size={9} className="text-cyber-muted" />
+              <span className="text-[10px] text-cyber-muted font-medium">Pipeline Timeline</span>
+            </div>
+            <span className="text-[9px] font-mono text-cyber-cyan">{(totalMs / 1000).toFixed(1)}s total</span>
+          </div>
+          {/* Gantt-style bars: simplified — proportional widths */}
+          <div className="flex gap-0.5 h-3 rounded overflow-hidden">
+            {agentData.filter((a) => a.latencyMs > 0).map((a) => {
+              const pct = (a.latencyMs / totalMs) * 100;
+              return (
+                <div
+                  key={a.id}
+                  className="h-full rounded-sm flex-shrink-0 transition-all"
+                  style={{
+                    width: `${pct}%`,
+                    background: a.color,
+                    opacity: 0.7,
+                    minWidth: "2px",
+                  }}
+                  title={`${a.label}: ${(a.latencyMs / 1000).toFixed(1)}s`}
+                />
+              );
+            })}
+          </div>
+          <div className="flex flex-wrap gap-x-2.5 gap-y-0.5 mt-1.5">
+            {agentData.filter((a) => a.latencyMs > 0).map((a) => (
+              <div key={a.id} className="flex items-center gap-1">
+                <div className="w-1.5 h-1.5 rounded-sm" style={{ background: a.color }} />
+                <span className="text-[8px] text-cyber-subtle">{a.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Provider health panel ────────────────────────────────────────────────────
 
 function ProvidersPanel() {
@@ -535,7 +760,7 @@ function ProvidersPanel() {
 export default function RightPanel() {
   const { agentMetrics, totalTokens, totalMs, status, selectedNode, activeParallelStage } = usePipeline();
   const [uptime, setUptime] = useState(0);
-  const [activeTab, setActiveTab] = useState<"agents" | "output" | "providers" | "models">("agents");
+  const [activeTab, setActiveTab] = useState<"agents" | "output" | "metrics" | "providers" | "models">("agents");
 
   useEffect(() => {
     const t = setInterval(() => setUptime((s) => s + 1), 1000);
@@ -661,18 +886,24 @@ export default function RightPanel() {
 
       {/* Tab switcher */}
       <div className="flex px-2.5 pb-1.5 gap-1 flex-shrink-0">
-        {(["agents", "output", "providers", "models"] as const).map((tab) => (
+        {([
+          { key: "agents",    label: "Agents" },
+          { key: "output",    label: "Output" },
+          { key: "metrics",   label: "Metrics" },
+          { key: "providers", label: "Prvdrs" },
+          { key: "models",    label: "Models" },
+        ] as const).map(({ key, label }) => (
           <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
+            key={key}
+            onClick={() => setActiveTab(key)}
             className={cn(
-              "flex-1 py-1 rounded text-[10px] font-medium transition-all duration-150 capitalize",
-              activeTab === tab
+              "flex-1 py-1 rounded text-[9px] font-medium transition-all duration-150",
+              activeTab === key
                 ? "bg-cyber-cyan/10 text-cyber-cyan"
                 : "text-cyber-muted hover:text-cyber-text"
             )}
           >
-            {tab}
+            {label}
           </button>
         ))}
       </div>
@@ -761,6 +992,18 @@ export default function RightPanel() {
               transition={{ duration: 0.15 }}
             >
               <ModelDownloadPanel />
+            </motion.div>
+          )}
+
+          {activeTab === "metrics" && (
+            <motion.div
+              key="metrics"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+            >
+              <MetricsPanel />
             </motion.div>
           )}
 

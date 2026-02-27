@@ -9,6 +9,8 @@ from typing import AsyncGenerator, Optional
 from pipeline.models import RunRequest, ProviderConfig
 from providers.registry import registry
 from providers.base import BaseProvider
+from pipeline.tools import web_search
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +24,11 @@ AGENTS = [
         "hf_model": "Qwen/Qwen2.5-3B-Instruct",
         "system_prompt": (
             "You are a task routing system. Analyze the user request briefly. "
-            "Classify the task type, estimate complexity, and state which specialist "
-            "agents (Coder, Analyzer) should handle it and why. Be concise (3-5 lines)."
+            "Classify the task type, estimate complexity, and decide which specialist "
+            "agents are needed: 'coder-1' (for coding/programming), 'analyzer-1' (for architecture/security review).\n\n"
+            "CRITICAL: You MUST include a line exactly like this in your response:\n"
+            "[TARGET_AGENTS] coder-1, analyzer-1\n"
+            "If no specialists are needed (e.g. general chat), output: [TARGET_AGENTS] none"
         ),
         "tokensPerSec": 52.0,
         "vramGb": 2.4,
@@ -87,13 +92,14 @@ AGENTS = [
 AGENTS_BY_ID = {a["id"]: a for a in AGENTS}
 
 # ─── DAG pipeline stages ──────────────────────────────────────────────────────
-# Each inner list is a stage. Lists with >1 agent run in parallel.
+# The pipeline is now dynamic. The hardcoded PIPELINE_STAGES logic below
+# is retained only as a fallback, but the run_pipeline loop builds it dynamically.
 
-PIPELINE_STAGES: list[list[str]] = [
-    ["router-1"],                    # Stage 1 — sequential
-    ["coder-1", "analyzer-1"],       # Stage 2 — PARALLEL
-    ["validator-1"],                  # Stage 3 — sequential
-    ["synthesizer-1"],               # Stage 4 — sequential
+FALLBACK_STAGES: list[list[str]] = [
+    ["router-1"],
+    ["coder-1", "analyzer-1"],
+    ["validator-1"],
+    ["synthesizer-1"],
 ]
 
 # ─── Simulation outputs ───────────────────────────────────────────────────────
@@ -265,11 +271,27 @@ def _resolve_provider(agent: dict, request: RunRequest) -> Optional[BaseProvider
 
 
 def _resolve_system_prompt(agent: dict, request: RunRequest) -> str:
+    base_prompt = agent.get("system_prompt", "")
+    active_tools = []
+    
     if request.agent_configs:
         cfg = next((c for c in request.agent_configs if c.agent_id == agent["id"]), None)
-        if cfg and cfg.system_prompt:
-            return cfg.system_prompt
-    return agent.get("system_prompt", "")
+        if cfg:
+            if cfg.system_prompt:
+                base_prompt = cfg.system_prompt
+            if cfg.tools:
+                active_tools = cfg.tools
+
+    if "web_search" in active_tools:
+        tools_addon = (
+            "\n\n[TOOLS]\nYou have access to the following tools if external/recent information is needed. "
+            "To use a tool, YOU MUST output ONLY a valid JSON object matching this schema, nothing else:\n"
+            '{"name": "web_search", "arguments": { "query": "your search query here" }}\n'
+            "If no tool is needed, output normal text."
+        )
+        base_prompt += tools_addon
+        
+    return base_prompt
 
 
 def _resolve_max_tokens(agent: dict, request: RunRequest) -> int:
@@ -386,6 +408,55 @@ async def _run_single_agent(
     async for event_str in _stream_tokens():
         yield event_str
 
+    # ── Tool Interception & Execution ──
+    # Check if the generated full_output is asking for a tool call JSON.
+    # Simple regex to catch json blocks or inline json.
+    tool_pattern = re.compile(r'\{\s*"name"\s*:\s*"web_search"\s*,\s*"arguments"\s*:\s*\{\s*"query"\s*:\s*"(.*?)"\s*\}\s*\}')
+    match = tool_pattern.search(full_output)
+    
+    if match and provider: # Execute tool if matched and running real models
+        query = match.group(1)
+        yield sse({
+            "type": "agent_token", 
+            "agentId": agent_id, 
+            "token": f"\n\n[SYSTEM: Executing Web Search for '{query}'...]\n\n",
+            "totalTokens": agent_tokens,
+            "tokensPerSec": 0
+        })
+        
+        # Actually run python tool
+        search_results = web_search(query)
+        
+        # Build new prompt
+        tool_prompt = f"{agent_input}\n\n[TOOL CALL RESULT for '{query} भी']:\n{search_results}\n\nNow, provide a final response strictly based on the tool results above."
+        
+        yield sse({
+            "type": "agent_token", 
+            "agentId": agent_id, 
+            "token": "[SYSTEM: Results received, generating final response...]\n\n",
+            "totalTokens": agent_tokens,
+            "tokensPerSec": 0
+        })
+        
+        # Second stream phase (Re-prompt with results)
+        added_output = ""
+        try:
+            async for token_text in provider.generate(
+                prompt=tool_prompt,
+                system_prompt=_resolve_system_prompt(agent, request),
+                max_tokens=_resolve_max_tokens(agent, request),
+                temperature=_resolve_temperature(agent, request),
+            ):
+                added_output += token_text
+                agent_tokens += max(1, len(token_text.split()))
+                elapsed = time.time() - agent_start_t
+                tps = round(agent_tokens / elapsed, 1) if elapsed > 0 else 0
+                yield sse({"type": "agent_token", "agentId": agent_id, "token": token_text, "totalTokens": agent_tokens, "tokensPerSec": tps})
+            
+            full_output += f"\n\n[Search Results Used] \n" + added_output
+        except Exception as e:
+            logger.warning(f"[{agent_id}] Re-prompting failed: {e}")
+
     # Store output BEFORE yielding agent_done
     previous_outputs[agent_id] = full_output
 
@@ -445,16 +516,52 @@ async def run_pipeline(
     previous_outputs: dict = {}
     agent_tokens_map: dict = {}   # agent_id → total tokens (from agent_done events)
 
-    # Count total agents across all stages
-    total_agents = sum(len(stage) for stage in PIPELINE_STAGES)
-
+    # Count total agents roughly (will adjust later)
     yield sse({
         "type": "pipeline_start",
-        "totalAgents": total_agents,
+        "totalAgents": 4, # Estimated default
         "prompt": prompt[:120],
     })
 
-    for stage_idx, stage_ids in enumerate(PIPELINE_STAGES):
+    # --- STAGE 1: ROUTER ---
+    stage_idx = 0
+    gen_router = _run_single_agent(AGENTS_BY_ID["router-1"], previous_outputs, prompt, request)
+    async for event_str in gen_router:
+        parsed = _parse_sse(event_str)
+        if parsed and parsed.get("type") == "agent_done":
+            agent_tokens_map[parsed["agentId"]] = parsed.get("totalTokens", 0)
+        yield event_str
+
+    router_output = previous_outputs.get("router-1", "")
+    
+    # --- DYNAMIC ROUTING LOGIC ---
+    # Parse [TARGET_AGENTS] from router output
+    target_agents_str = ""
+    match = re.search(r'\[TARGET_AGENTS\](.*?)(?:\n|$)', router_output)
+    if match:
+        target_agents_str = match.group(1).lower()
+    
+    stage_2_agents = []
+    if "coder-1" in target_agents_str or "coder" in target_agents_str:
+        stage_2_agents.append("coder-1")
+    if "analyzer-1" in target_agents_str or "analyzer" in target_agents_str:
+        stage_2_agents.append("analyzer-1")
+        
+    # If no valid agents parsed but it's not explicitly "none", fallback to all
+    if not stage_2_agents and "none" not in target_agents_str:
+        stage_2_agents = ["coder-1", "analyzer-1"]
+
+    dynamic_stages = []
+    if stage_2_agents:
+        dynamic_stages.append(stage_2_agents)
+        if "coder-1" in stage_2_agents:
+            dynamic_stages.append(["validator-1"])
+            
+    dynamic_stages.append(["synthesizer-1"])
+
+    # --- EXECUTE REMAINING STAGES ---
+    for stage_ids in dynamic_stages:
+        stage_idx += 1
         agents = [AGENTS_BY_ID[aid] for aid in stage_ids]
         is_parallel = len(agents) > 1
 
@@ -480,7 +587,7 @@ async def run_pipeline(
             yield event_str
 
         # Brief pause between stages
-        if stage_idx < len(PIPELINE_STAGES) - 1:
+        if stage_idx < len(dynamic_stages):
             await asyncio.sleep(0.2)
 
     total_tokens = sum(agent_tokens_map.values())

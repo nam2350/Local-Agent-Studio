@@ -8,7 +8,7 @@ import {
   RotateCcw,
   Zap,
   ChevronDown,
-  Share2,
+  FolderOpen,
   Save,
   Terminal,
   CheckCircle2,
@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePipeline, type ProviderType } from "@/context/PipelineContext";
+import SavePipelineModal from "@/components/modals/SavePipelineModal";
+import LoadPipelineModal from "@/components/modals/LoadPipelineModal";
 
 const pipelineTemplates = [
   "Build a user authentication REST API with JWT tokens",
@@ -48,6 +50,8 @@ export default function TopBar() {
   const [showTemplates, setShowTemplates] = useState(false);
   const [showProviders, setShowProviders] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState(false);
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [showLoadModal, setShowLoadModal] = useState(false);
 
   const isRunning = status === "running";
   const isDone    = status === "done";
@@ -353,22 +357,31 @@ export default function TopBar() {
         <button
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-cyber-muted hover:text-cyber-text transition-colors duration-150"
           style={{ border: "1px solid rgba(255,255,255,0.06)" }}
+          title="Terminal (coming soon)"
         >
           <Terminal size={12} />
         </button>
         <button
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-cyber-muted hover:text-cyber-text transition-colors duration-150"
+          onClick={() => setShowSaveModal(true)}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-cyber-muted hover:text-cyber-cyan hover:border-cyber-cyan/30 transition-all duration-150"
           style={{ border: "1px solid rgba(255,255,255,0.06)" }}
+          title="Save Pipeline"
         >
           <Save size={12} />
         </button>
         <button
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-cyber-muted hover:text-cyber-text transition-colors duration-150"
+          onClick={() => setShowLoadModal(true)}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-cyber-muted hover:text-cyber-purple hover:border-cyber-purple/30 transition-all duration-150"
           style={{ border: "1px solid rgba(255,255,255,0.06)" }}
+          title="Load Pipeline"
         >
-          <Share2 size={12} />
+          <FolderOpen size={12} />
         </button>
       </div>
+
+      {/* Modals */}
+      <SavePipelineModal open={showSaveModal} onClose={() => setShowSaveModal(false)} />
+      <LoadPipelineModal open={showLoadModal} onClose={() => setShowLoadModal(false)} />
     </motion.header>
   );
 }
