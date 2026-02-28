@@ -27,6 +27,7 @@ def _get_agent(agent_id: str) -> dict:
             "model": "Qwen2.5-3B-Instruct",
             "hf_model": "Qwen/Qwen2.5-3B-Instruct",
             "system_prompt": "You are a helpful assistant.",
+            "role": "assistant",
             "tokensPerSec": 35.0,
             "vramGb": 3.0,
             "warmupSec": 0.5,
@@ -38,6 +39,7 @@ def _get_agent(agent_id: str) -> dict:
         "model": agent_record["model_id"],
         "hf_model": agent_record["model_id"],
         "system_prompt": agent_record["system_prompt"],
+        "role": agent_record.get("role", "assistant"),
         "tokensPerSec": 35.0,
         "vramGb": 3.0,
         "warmupSec": 0.5,
@@ -66,10 +68,11 @@ FALLBACK_STAGES: list[list[str]] = [
     ["synthesizer-1"],
 ]
 
-# ─── Simulation outputs ───────────────────────────────────────────────────────
+# ─── Role-based simulation outputs ───────────────────────────────────────────
+# 에이전트 ID가 아닌 role(역할)로 키를 매핑 — 어떤 agent_id가 와도 동작함
 
-AGENT_OUTPUTS = {
-    "router-1": """\
+_ROLE_SIM_OUTPUTS: dict[str, str] = {
+    "router": """\
 Analyzing incoming request... Task classification in progress.
 
 [ROUTING ENGINE]
@@ -82,15 +85,15 @@ Analyzing incoming request... Task classification in progress.
   → Analyzer      (confidence: 89%) — architecture review needed
 
 [EXECUTION PLAN]
-  Step 1 · Router    → classify & dispatch
-  Step 2 · Coder     → generate implementation  ┐ PARALLEL
-  Step 2 · Analyzer  → requirements analysis    ┘
-  Step 3 · Validator → quality & security checks
+  Step 1 · Router      → classify & dispatch
+  Step 2 · Coder       → generate implementation  ┐ PARALLEL
+  Step 2 · Analyzer    → requirements analysis    ┘
+  Step 3 · Validator   → quality & security checks
   Step 4 · Synthesizer → merge & deliver
 
 Dispatching to specialist agents. Pipeline initialized. ✓""",
 
-    "coder-1": """\
+    "coder": """\
 Generating implementation...
 
 ```python
@@ -99,7 +102,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from datetime import datetime, timedelta
 from typing import Optional
-import jwt, bcrypt
+import jwt
 
 app = FastAPI(title="Auth API", version="1.0.0")
 SECRET_KEY = "change-me-in-production"
@@ -131,8 +134,8 @@ async def get_me(token: str = Depends(oauth2_scheme)):
 ```
 Implementation complete. ✓""",
 
-    "analyzer-1": """\
-Deep analysis initiated... [RUNNING IN PARALLEL WITH CODER]
+    "analyzer": """\
+Deep analysis initiated...
 
 [SECURITY REVIEW]
   ✓ JWT signing       : HS256 (consider RS256 for distributed systems)
@@ -147,7 +150,7 @@ Deep analysis initiated... [RUNNING IN PARALLEL WITH CODER]
 
 Recommendations forwarded to Validator & Synthesizer. ✓""",
 
-    "validator-1": """\
+    "validator": """\
 Running validation suite...
 
 [CODE QUALITY]   Score: 94 / 100
@@ -163,29 +166,54 @@ Running validation suite...
 [VERDICT]   APPROVED ✓
 Proceed with recommended hardening before production.""",
 
-    "synthesizer-1": """\
+    "synthesizer": """\
 Synthesizing outputs from all agents...
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   FINAL SYNTHESIS REPORT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-FastAPI JWT Auth — production-ready implementation generated.
+Production-ready implementation generated.
 
-Security Score : 94 / 100  ·  Code Quality: 94 / 100
-
-Parallel analysis completed:
-  Coder    → implementation generated (JWT + OAuth2)
-  Analyzer → security & architecture reviewed simultaneously
+Parallel analysis completed successfully.
 
 Priority Actions:
   [HIGH]   Add /auth/refresh endpoint
-  [HIGH]   Implement rate limiting (slowapi, 5 req/min)
+  [HIGH]   Implement rate limiting (5 req/min)
   [MEDIUM] Switch to RS256 for multi-service deployments
 
 Pipeline complete. All agents finished successfully. ✓
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━""",
+
+    "vision": """\
+Analyzing visual content...
+
+[VISUAL ANALYSIS]
+  Layout        : Grid-based, 12-column responsive ✓
+  Accessibility : WCAG 2.1 AA compliant (contrast ratio 4.7:1) ✓
+  Components    : 14 UI elements detected
+
+[DESIGN REVIEW]
+  Typography    : Consistent scale (16px base, 1.5 line-height)
+  Color palette : 4 primary colors + 2 accent — cohesive ✓
+  Spacing       : 8px grid system applied throughout
+
+[RECOMMENDATIONS]
+  ⚠ Add aria-labels to icon-only buttons (3 found)
+  ⚠ Increase touch target size on mobile (min 44×44px)
+
+Visual analysis complete. ✓""",
+
+    "assistant": "Processing your request...\n\nAnalysis complete. Ready for next stage.",
 }
+
+_ROLE_SIM_DEFAULT = "Processing...\n\nTask handled. Passing results downstream."
+
+
+def _get_sim_output(agent: dict) -> str:
+    """에이전트의 role을 기반으로 시뮬레이션 출력을 반환."""
+    role = agent.get("role", "assistant")
+    return _ROLE_SIM_OUTPUTS.get(role, _ROLE_SIM_DEFAULT)
 
 
 # ─── SSE helper ───────────────────────────────────────────────────────────────
@@ -292,21 +320,16 @@ def _resolve_temperature(agent: dict, request: RunRequest) -> float:
 # ─── Agent input builder ──────────────────────────────────────────────────────
 
 def _build_agent_input(prompt: str, agent_id: str, previous: dict) -> str:
-    if agent_id == "router-1":
+    """이전 에이전트 출력을 컨텍스트로 포함한 입력 프롬프트를 생성.
+
+    agent_id에 의존하지 않는 제네릭 구현 — 어떤 파이프라인 구성도 지원.
+    """
+    if not previous:
         return prompt
-    if agent_id == "coder-1":
-        return f"Task: {prompt}\n\nRouter decision:\n{previous.get('router-1', '')}"
-    if agent_id == "analyzer-1":
-        return f"Task: {prompt}\n\nRouter analysis:\n{previous.get('router-1', '')}"
-    if agent_id == "validator-1":
-        return f"Review this code:\n{previous.get('coder-1', '')}"
-    if agent_id == "synthesizer-1":
-        parts = [f"Original task: {prompt}"]
-        for aid, lbl in [("router-1","Router"),("coder-1","Coder"),("analyzer-1","Analyzer"),("validator-1","Validator")]:
-            if aid in previous:
-                parts.append(f"\n--- {lbl} ---\n{previous[aid]}")
-        return "\n".join(parts)
-    return prompt
+    ctx_parts = [f"Original task: {prompt}"]
+    for prev_id, prev_out in previous.items():
+        ctx_parts.append(f"\n--- {prev_id} output ---\n{str(prev_out)[:800]}")
+    return "\n".join(ctx_parts)
 
 
 # ─── Simulation generator ─────────────────────────────────────────────────────
@@ -314,7 +337,7 @@ def _build_agent_input(prompt: str, agent_id: str, previous: dict) -> str:
 async def _simulate_agent(agent: dict) -> AsyncGenerator[str, None]:
     tps = agent["tokensPerSec"]
     delay = 1.0 / tps
-    output = AGENT_OUTPUTS.get(agent["id"], "Processing...")
+    output = _get_sim_output(agent)
     for word in output.split(" "):
         await asyncio.sleep(delay)
         yield word + " "

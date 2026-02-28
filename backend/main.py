@@ -123,91 +123,125 @@ class DownloadRequest(BaseModel):
 
 @app.get("/api/models/local")
 async def get_local_models():
-    """List locally downloaded models from backend/models/ directory."""
-    models = []
-    if MODELS_DIR.exists():
-        for child in sorted(MODELS_DIR.iterdir()):
-            if child.is_dir() and child.name != "__pycache__" and not child.name.startswith("."):
-                # 폴더명: org--model-name → org/model-name
-                hf_id = child.name.replace("--", "/", 1)
-                total_size = sum(f.stat().st_size for f in child.rglob("*") if f.is_file())
-                nb_files = sum(1 for f in child.rglob("*") if f.is_file())
-                size_gb = round(total_size / (1024**3), 2)
-                models.append({
-                    "model_id": hf_id,
-                    "local_path": str(child),
+    """List locally downloaded models.
+    - flat:  models/<org>--<name>/
+    - role:  models/<role>/<org>--<name>/
+    """
+    result = []
+    if not MODELS_DIR.exists():
+        return {"models": result}
+
+    for top in sorted(MODELS_DIR.iterdir()):
+        if not top.is_dir() or top.name.startswith(".") or top.name == "__pycache__":
+            continue
+
+        # role 하위 폴더 구조: config.json 없고 하위에 모델 폴더 존재
+        if not (top / "config.json").exists():
+            for model_dir in sorted(top.iterdir()):
+                if not model_dir.is_dir() or not (model_dir / "config.json").exists():
+                    continue
+                total_size = sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file())
+                result.append({
+                    "model_id": model_dir.name.replace("--", "/", 1),
+                    "role": top.name,
+                    "local_path": str(model_dir),
                     "size": total_size,
-                    "size_str": f"{size_gb} GB",
-                    "nb_files": nb_files,
+                    "size_str": f"{round(total_size / (1024**3), 2)} GB",
+                    "nb_files": sum(1 for f in model_dir.rglob("*") if f.is_file()),
                 })
-    return {"models": models}
+        else:
+            # flat 구조
+            total_size = sum(f.stat().st_size for f in top.rglob("*") if f.is_file())
+            result.append({
+                "model_id": top.name.replace("--", "/", 1),
+                "role": None,
+                "local_path": str(top),
+                "size": total_size,
+                "size_str": f"{round(total_size / (1024**3), 2)} GB",
+                "nb_files": sum(1 for f in top.rglob("*") if f.is_file()),
+            })
+
+    return {"models": result}
 
 
 @app.post("/api/models/download")
 async def download_model(body: DownloadRequest, req: Request):
-    """Stream HuggingFace model download progress as SSE."""
+    """
+    HuggingFace 모델을 backend/models/<org>--<name>/ 에 다운로드 (HF 캐시 미사용).
+    snapshot_download + tqdm 진행률 콜백을 SSE로 스트리밍.
+    """
     def sse(data: dict) -> str:
         return f"data: {json.dumps(data)}\n\n"
 
     async def generate():
         model_id = body.model_id.strip()
+        local_dir = MODELS_DIR / model_id.replace("/", "--")
+        local_dir.mkdir(parents=True, exist_ok=True)
+
         loop = asyncio.get_event_loop()
 
-        # ── List files ────────────────────────────────────────────────────────
+        # ── 1. 파일 목록 조회 ────────────────────────────────────────────────
         yield sse({"type": "download_listing", "modelId": model_id})
         try:
             from huggingface_hub import list_repo_files
-            files: list[str] = await loop.run_in_executor(
+            all_files: list[str] = await loop.run_in_executor(
                 None, lambda: list(list_repo_files(model_id))
             )
         except Exception as e:
             yield sse({"type": "download_error", "message": str(e)})
             return
 
-        # Skip non-essential large files (keep weights + config)
-        skip_exts = {".msgpack", ".h5", ".ot", ".onnx"}
-        essential = [f for f in files if not any(f.endswith(ext) for ext in skip_exts)]
+        skip_exts = {".msgpack", ".h5", ".ot", ".onnx", ".onnx_data"}
+        essential = [f for f in all_files if not any(f.endswith(ext) for ext in skip_exts)]
+        total = len(essential)
 
-        yield sse({
-            "type": "download_start",
-            "modelId": model_id,
-            "totalFiles": len(essential),
-        })
+        yield sse({"type": "download_start", "modelId": model_id, "totalFiles": total})
 
-        # ── Download each file ────────────────────────────────────────────────
+        # ── 2. 파일별 순차 다운로드 (hf_hub_download → local_dir) ───────────
         from huggingface_hub import hf_hub_download
         downloaded = 0
         errors = 0
 
         for i, filename in enumerate(essential):
             if await req.is_disconnected():
-                break
+                return
+
             yield sse({
                 "type": "download_file",
                 "filename": filename,
                 "fileIndex": i,
-                "totalFiles": len(essential),
-                "pct": round(i / len(essential) * 100, 1),
+                "totalFiles": total,
+                "pct": round(i / total * 100, 1),
             })
-            # 모델을 로컬 backend/models/<org--name>/ 에 직접 저장
-            local_dir = MODELS_DIR / model_id.replace("/", "--")
+
             try:
                 await loop.run_in_executor(
-                    None, lambda f=filename: hf_hub_download(
-                        model_id, f, local_dir=str(local_dir)
-                    )
+                    None,
+                    lambda f=filename: hf_hub_download(
+                        repo_id=model_id,
+                        filename=f,
+                        local_dir=str(local_dir),
+                        local_dir_use_symlinks=False,  # 심볼릭 링크 없이 실제 파일 복사
+                    ),
                 )
                 downloaded += 1
             except Exception as e:
                 errors += 1
                 yield sse({"type": "download_file_error", "filename": filename, "message": str(e)})
 
+        # ── 3. 완료 ──────────────────────────────────────────────────────────
+        # 전체 크기 계산
+        total_bytes = sum(f.stat().st_size for f in local_dir.rglob("*") if f.is_file())
+        size_gb = round(total_bytes / (1024 ** 3), 2)
+
         yield sse({
             "type": "download_complete",
             "modelId": model_id,
-            "totalFiles": len(essential),
+            "localPath": str(local_dir),
+            "totalFiles": total,
             "downloaded": downloaded,
             "errors": errors,
+            "sizeGb": size_gb,
         })
 
     return StreamingResponse(

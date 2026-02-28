@@ -37,17 +37,32 @@ class TransformersProvider(BaseProvider):
     def model_id(self) -> str:
         return self._model_id
 
+    def _resolve_load_path(self) -> str:
+        """
+        로컬 backend/models/<org>--<name>/ 경로를 우선 사용.
+        로컬에 없으면 HF model_id 그대로 사용 (HF 캐시/다운로드 폴백).
+        """
+        try:
+            from config import resolve_model_path
+            path = resolve_model_path(self._model_id)
+            if path != self._model_id:
+                logger.info(f"[Transformers] Using local model: {path}")
+            return path
+        except ImportError:
+            return self._model_id
+
     def _load_model(self):
         """Load model & tokenizer into cache (blocking — run in thread)."""
         if self._model_id in _model_cache:
             return _model_cache[self._model_id], _tokenizer_cache[self._model_id]
 
-        logger.info(f"[Transformers] Loading {self._model_id} ...")
+        load_path = self._resolve_load_path()
+        logger.info(f"[Transformers] Loading {self._model_id} from {load_path} ...")
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
         import torch
 
         tokenizer = AutoTokenizer.from_pretrained(
-            self._model_id, trust_remote_code=True
+            load_path, trust_remote_code=True
         )
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -64,7 +79,7 @@ class TransformersProvider(BaseProvider):
         else:
             kwargs["torch_dtype"] = torch.float16
 
-        model = AutoModelForCausalLM.from_pretrained(self._model_id, **kwargs)
+        model = AutoModelForCausalLM.from_pretrained(load_path, **kwargs)
         model.eval()
 
         _model_cache[self._model_id] = model
