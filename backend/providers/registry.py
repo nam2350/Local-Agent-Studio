@@ -36,24 +36,30 @@ class ProviderRegistry:
             )
         return self._providers[key]
 
-    def get_transformers(
-        self,
-        model_id: str,
-        device: str = "auto",
-        load_in_4bit: bool = False,
-        load_in_8bit: bool = False,
-    ) -> BaseProvider:
+    def get_transformers(self, model_id: str, device: str = "auto") -> BaseProvider:
+        """fp16 TransformersProvider 인스턴스 반환 (캐싱)."""
         from .transformers_provider import TransformersProvider
 
         key = f"transformers:{model_id}"
         if key not in self._providers:
-            self._providers[key] = TransformersProvider(
-                model_id=model_id,
-                device=device,
-                load_in_4bit=load_in_4bit,
-                load_in_8bit=load_in_8bit,
-            )
+            self._providers[key] = TransformersProvider(model_id=model_id, device=device)
         return self._providers[key]
+
+    def unload_transformers(self, model_id: str) -> bool:
+        """특정 Transformers 모델을 registry + GPU 캐시에서 제거."""
+        from .transformers_provider import unload_model
+
+        self._providers.pop(f"transformers:{model_id}", None)
+        return unload_model(model_id)
+
+    def unload_all_transformers(self) -> list:
+        """모든 Transformers 모델을 언로드. 제거된 model_id 목록 반환."""
+        from .transformers_provider import unload_all_models
+
+        keys = [k for k in self._providers if k.startswith("transformers:")]
+        for k in keys:
+            del self._providers[k]
+        return unload_all_models()
 
     async def health_check_all(self) -> Dict[str, bool]:
         """Check default provider endpoints + any registered providers."""

@@ -256,6 +256,49 @@ async def download_model(body: DownloadRequest, req: Request):
     )
 
 
+# ─── GPU VRAM & 모델 언로드 ───────────────────────────────────────────────────
+
+@app.get("/api/vram")
+def get_vram_status():
+    """현재 GPU VRAM 사용량 + 캐시된 모델 목록 반환."""
+    from providers.transformers_provider import TransformersProvider, _model_cache
+    return {
+        "vram": TransformersProvider.get_vram_info(),
+        "cached_models": list(_model_cache.keys()),
+        "cached_count": len(_model_cache),
+    }
+
+
+class UnloadRequest(BaseModel):
+    model_id: str
+
+
+@app.post("/api/models/unload")
+def unload_model_endpoint(body: UnloadRequest):
+    """GPU VRAM에서 특정 모델을 언로드."""
+    success = registry.unload_transformers(body.model_id)
+    from providers.transformers_provider import TransformersProvider
+    return {
+        "ok": success,
+        "model_id": body.model_id,
+        "message": "Unloaded" if success else "Model not in cache",
+        "vram_allocated_gb": TransformersProvider.get_vram_allocated_gb(),
+    }
+
+
+@app.post("/api/models/unload_all")
+def unload_all_endpoint():
+    """GPU VRAM에서 모든 Transformers 모델을 언로드."""
+    unloaded = registry.unload_all_transformers()
+    from providers.transformers_provider import TransformersProvider
+    return {
+        "ok": True,
+        "unloaded": unloaded,
+        "count": len(unloaded),
+        "vram_allocated_gb": TransformersProvider.get_vram_allocated_gb(),
+    }
+
+
 @app.post("/api/run")
 async def run(request: RunRequest, req: Request):
     """Stream pipeline execution as Server-Sent Events."""

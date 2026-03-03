@@ -300,11 +300,16 @@ type LocalModel = { model_id: string; size_str: string; nb_files: number };
 
 const BACKEND = "http://localhost:8000";
 
+type VramInfo = { allocated_gb: number; total_gb: number; free_gb: number; reserved_gb: number };
+
 function ModelDownloadPanel() {
   const [input, setInput] = useState("");
   const [dlState, setDlState] = useState<DownloadState>({ stage: "idle" });
   const [localModels, setLocalModels] = useState<LocalModel[]>([]);
   const [loadingLocal, setLoadingLocal] = useState(false);
+  const [vramInfo, setVramInfo] = useState<VramInfo | null>(null);
+  const [cachedModels, setCachedModels] = useState<string[]>([]);
+  const [unloadingModel, setUnloadingModel] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const fetchLocalModels = useCallback(async () => {
@@ -320,6 +325,45 @@ function ModelDownloadPanel() {
   }, []);
 
   useEffect(() => { fetchLocalModels(); }, [fetchLocalModels]);
+
+  // VRAM 상태 5초 폴링
+  useEffect(() => {
+    const fetchVram = async () => {
+      try {
+        const res = await fetch(`${BACKEND}/api/vram`);
+        if (res.ok) {
+          const data = await res.json();
+          setVramInfo(data.vram ?? null);
+          setCachedModels(data.cached_models ?? []);
+        }
+      } catch { /* backend offline */ }
+    };
+    fetchVram();
+    const id = setInterval(fetchVram, 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  const handleUnload = useCallback(async (modelId: string) => {
+    setUnloadingModel(modelId);
+    try {
+      await fetch(`${BACKEND}/api/models/unload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model_id: modelId }),
+      });
+    } finally {
+      setUnloadingModel(null);
+    }
+  }, []);
+
+  const handleUnloadAll = useCallback(async () => {
+    setUnloadingModel("__all__");
+    try {
+      await fetch(`${BACKEND}/api/models/unload_all`, { method: "POST" });
+    } finally {
+      setUnloadingModel(null);
+    }
+  }, []);
 
   const handleDownload = useCallback(async () => {
     const modelId = input.trim();
@@ -471,7 +515,36 @@ function ModelDownloadPanel() {
         </AnimatePresence>
       </div>
 
-      {/* Local models */}
+      {/* GPU VRAM 게이지 */}
+      {vramInfo && vramInfo.total_gb > 0 && (
+        <div
+          className="rounded-lg p-2.5"
+          style={{ background: "rgba(168,85,247,0.04)", border: "1px solid rgba(168,85,247,0.12)" }}
+        >
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <MemoryStick size={10} className="text-cyber-purple" />
+              <span className="text-[10px] text-cyber-muted">GPU VRAM</span>
+            </div>
+            <span className="text-[9px] font-mono text-cyber-purple">
+              {vramInfo.allocated_gb.toFixed(2)} / {vramInfo.total_gb.toFixed(1)} GB
+            </span>
+          </div>
+          <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+            <motion.div
+              className="h-full rounded-full"
+              style={{ background: "linear-gradient(90deg, #a855f7, #22d3ee)" }}
+              animate={{ width: `${Math.min((vramInfo.allocated_gb / vramInfo.total_gb) * 100, 100).toFixed(1)}%` }}
+              transition={{ duration: 0.4 }}
+            />
+          </div>
+          <p className="text-[9px] text-cyber-subtle mt-1">
+            Free: {vramInfo.free_gb.toFixed(2)} GB · Reserved: {vramInfo.reserved_gb.toFixed(2)} GB
+          </p>
+        </div>
+      )}
+
+      {/* Local models — 디스크 */}
       <div>
         <div className="flex items-center justify-between mb-1.5">
           <div className="flex items-center gap-1.5">
@@ -497,23 +570,56 @@ function ModelDownloadPanel() {
           </div>
         ) : (
           <div className="flex flex-col gap-1">
-            {localModels.map((m) => (
-              <div
-                key={m.model_id}
-                className="rounded px-2.5 py-1.5 flex items-center gap-2"
-                style={{ background: "rgba(11,16,37,0.4)", border: "1px solid rgba(255,255,255,0.04)" }}
-              >
+            {localModels.map((m) => {
+              const inVram = cachedModels.includes(m.model_id);
+              return (
                 <div
-                  className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                  style={{ background: "#10b981" }}
-                />
-                <span className="text-[10px] text-cyber-text flex-1 truncate font-mono">{m.model_id}</span>
-                <span className="text-[9px] text-cyber-muted flex-shrink-0">{m.size_str}</span>
-              </div>
-            ))}
+                  key={m.model_id}
+                  className="rounded px-2.5 py-1.5 flex items-center gap-2"
+                  style={{ background: "rgba(11,16,37,0.4)", border: "1px solid rgba(255,255,255,0.04)" }}
+                >
+                  <div
+                    className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                    style={{ background: inVram ? "#a855f7" : "#10b981" }}
+                    title={inVram ? "Loaded in VRAM" : "On disk"}
+                  />
+                  <span className="text-[10px] text-cyber-text flex-1 truncate font-mono">{m.model_id}</span>
+                  <span className="text-[9px] text-cyber-muted flex-shrink-0">{m.size_str}</span>
+                  {inVram && (
+                    <button
+                      onClick={() => handleUnload(m.model_id)}
+                      disabled={unloadingModel === m.model_id}
+                      className="text-cyber-subtle hover:text-cyber-red transition-colors disabled:opacity-40 flex-shrink-0"
+                      title="Unload from GPU"
+                    >
+                      {unloadingModel === m.model_id
+                        ? <Loader2 size={9} className="animate-spin" />
+                        : <X size={9} />
+                      }
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
+
+      {/* Unload All 버튼 (VRAM에 모델이 있을 때만) */}
+      {cachedModels.length > 0 && (
+        <button
+          onClick={handleUnloadAll}
+          disabled={unloadingModel === "__all__"}
+          className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[10px] text-cyber-red/70 hover:text-cyber-red disabled:opacity-40 transition-colors"
+          style={{ border: "1px solid rgba(239,68,68,0.15)" }}
+        >
+          {unloadingModel === "__all__"
+            ? <Loader2 size={9} className="animate-spin" />
+            : <X size={9} />
+          }
+          <span>Unload All ({cachedModels.length} model{cachedModels.length > 1 ? "s" : ""})</span>
+        </button>
+      )}
     </div>
   );
 }

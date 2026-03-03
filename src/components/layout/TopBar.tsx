@@ -15,9 +15,10 @@ import {
   AlertCircle,
   Send,
   Cpu,
+  GitBranch,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { usePipeline, type ProviderType } from "@/context/PipelineContext";
+import { usePipeline, type ProviderType, type OrchestrationMode } from "@/context/PipelineContext";
 import SavePipelineModal from "@/components/modals/SavePipelineModal";
 import LoadPipelineModal from "@/components/modals/LoadPipelineModal";
 
@@ -37,6 +38,11 @@ const PROVIDERS: { value: ProviderType; label: string; color: string }[] = [
   { value: "transformers", label: "HF Transformers", color: "#10b981" },
 ];
 
+const ORCHESTRATION_MODES: { value: OrchestrationMode; label: string; description: string; color: string }[] = [
+  { value: "dag",       label: "DAG",       description: "Linear pipeline (no retry)",     color: "#64748b" },
+  { value: "langgraph", label: "LangGraph", description: "Validator retry loop (max 3×)", color: "#a855f7" },
+];
+
 export default function TopBar() {
   const {
     status, prompt, setPrompt,
@@ -45,10 +51,13 @@ export default function TopBar() {
     useRealModels, setUseRealModels,
     providerType, setProviderType,
     providerStatus,
+    orchestrationMode, setOrchestrationMode,
+    retryInfo,
   } = usePipeline();
 
   const [showTemplates, setShowTemplates] = useState(false);
   const [showProviders, setShowProviders] = useState(false);
+  const [showOrchestration, setShowOrchestration] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [showLoadModal, setShowLoadModal] = useState(false);
@@ -58,6 +67,7 @@ export default function TopBar() {
   const isStopped = status === "stopped";
 
   const currentProvider = PROVIDERS.find((p) => p.value === providerType) ?? PROVIDERS[0];
+  const currentOrchestration = ORCHESTRATION_MODES.find((m) => m.value === orchestrationMode) ?? ORCHESTRATION_MODES[0];
   const isProviderOnline =
     providerType === "simulation" ? true :
     providerType === "transformers" ? providerStatus.transformers :
@@ -77,7 +87,7 @@ export default function TopBar() {
       {/* Logo / pipeline name */}
       <div className="relative flex-shrink-0">
         <button
-          onClick={() => { setShowTemplates(!showTemplates); setShowProviders(false); }}
+          onClick={() => { setShowTemplates(!showTemplates); setShowProviders(false); setShowOrchestration(false); }}
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all duration-150 hover:bg-white/[0.04]"
           style={{ border: "1px solid rgba(255,255,255,0.06)" }}
         >
@@ -165,7 +175,7 @@ export default function TopBar() {
       {/* Provider selector */}
       <div className="relative flex-shrink-0">
         <button
-          onClick={() => { setShowProviders(!showProviders); setShowTemplates(false); }}
+          onClick={() => { setShowProviders(!showProviders); setShowTemplates(false); setShowOrchestration(false); }}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-all duration-150"
           style={{
             border: `1px solid ${currentProvider.color}40`,
@@ -247,6 +257,64 @@ export default function TopBar() {
         </AnimatePresence>
       </div>
 
+      {/* Divider */}
+      <div className="w-px h-5 bg-white/[0.08] flex-shrink-0" />
+
+      {/* Orchestration mode selector */}
+      <div className="relative flex-shrink-0">
+        <button
+          onClick={() => { setShowOrchestration(!showOrchestration); setShowProviders(false); setShowTemplates(false); }}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-all duration-150"
+          style={{
+            border: `1px solid ${currentOrchestration.color}40`,
+            background: `${currentOrchestration.color}08`,
+            color: currentOrchestration.color,
+          }}
+          title="Orchestration Mode"
+        >
+          <GitBranch size={11} />
+          <span className="font-medium">{currentOrchestration.label}</span>
+          <ChevronDown size={10} />
+        </button>
+
+        <AnimatePresence>
+          {showOrchestration && (
+            <motion.div
+              initial={{ opacity: 0, y: -4, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -4, scale: 0.97 }}
+              transition={{ duration: 0.12 }}
+              className="absolute top-full right-0 mt-1 w-56 rounded-xl overflow-hidden z-50"
+              style={{
+                background: "rgba(7, 10, 22, 0.98)",
+                border: "1px solid rgba(168, 85, 247, 0.12)",
+                boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+              }}
+            >
+              <div className="p-1">
+                <p className="text-[10px] text-cyber-muted uppercase tracking-widest px-3 py-1.5">
+                  Orchestration Mode
+                </p>
+                {ORCHESTRATION_MODES.map((m) => (
+                  <button
+                    key={m.value}
+                    onClick={() => { setOrchestrationMode(m.value); setShowOrchestration(false); }}
+                    className={cn(
+                      "w-full text-left px-3 py-2 rounded-lg text-xs transition-colors duration-100",
+                      orchestrationMode === m.value ? "text-white" : "text-cyber-muted hover:text-cyber-text"
+                    )}
+                    style={orchestrationMode === m.value ? { background: `${m.color}20`, color: m.color } : {}}
+                  >
+                    <div className="font-medium">{m.label}</div>
+                    <div className="text-[10px] opacity-60 mt-0.5">{m.description}</div>
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
       {/* Pipeline controls */}
       <div className="flex items-center gap-1.5 flex-shrink-0">
         <motion.button
@@ -300,6 +368,20 @@ export default function TopBar() {
               <span className="text-xs text-cyber-cyan font-mono">
                 {useRealModels ? `${currentProvider.label}` : "running"}
               </span>
+              {retryInfo && (
+                <motion.span
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+                  style={{
+                    background: "rgba(168, 85, 247, 0.15)",
+                    border: "1px solid rgba(168, 85, 247, 0.3)",
+                    color: "#a855f7",
+                  }}
+                >
+                  retry {retryInfo.retryCount}/{retryInfo.maxRetries}
+                </motion.span>
+              )}
             </motion.div>
           )}
 

@@ -5,9 +5,7 @@ from typing import Literal, Optional, List
 class ProviderConfig(BaseModel):
     type: Literal["ollama", "lmstudio", "llamacpp", "transformers", "simulation"] = "simulation"
     base_url: Optional[str] = None    # for openai-compat backends
-    model_id: Optional[str] = None    # HF model ID for transformers
-    load_in_4bit: bool = False
-    load_in_8bit: bool = False
+    model_id: Optional[str] = None    # HF model ID for transformers (fp16만 지원, bitsandbytes 없음)
 
 
 class AgentRunConfig(BaseModel):
@@ -24,6 +22,14 @@ class RunRequest(BaseModel):
     use_real_models: bool = False
     default_provider: ProviderConfig = ProviderConfig()
     agent_configs: Optional[List[AgentRunConfig]] = None
+    # Phase 12A: 구조화된 JSON 라우팅 활성화
+    # True(기본): JSON → regex → fallback 3단계 파싱
+    # False: regex → fallback만 사용 (하위 호환)
+    structured_routing: bool = True
+    # Phase 12B: 오케스트레이션 모드
+    # "dag"       — 기존 DAG 파이프라인 (완전 불변, 기본값)
+    # "langgraph" — LangGraph StateGraph (Validator 루프백 포함)
+    orchestration_mode: Literal["dag", "langgraph"] = "dag"
 
 
 class PipelineEvent(BaseModel):

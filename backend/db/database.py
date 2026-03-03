@@ -49,6 +49,29 @@ def init_db() -> None:
              "google/gemma-2-2b-it", "google/gemma-3-4b-it")
         )
 
+        # Phase 12A: router-1 system_prompt를 JSON 출력 요구사항 포함 버전으로 마이그레이션
+        _NEW_ROUTER_PROMPT = (
+            "You are a task routing system. Analyze the user request and decide "
+            "which specialist agents are needed.\n\n"
+            "Available agents:\n"
+            "- coder-1: code generation, programming, implementation tasks\n"
+            "- analyzer-1: architecture review, security analysis, requirements\n\n"
+            "CRITICAL: You MUST output a JSON object somewhere in your response:\n"
+            "{\"target_agents\": [\"coder-1\", \"analyzer-1\"], "
+            "\"reason\": \"Brief explanation of routing decision\"}\n\n"
+            "Rules:\n"
+            "- List only the agents actually needed for this task\n"
+            "- If no specialists needed: "
+            "{\"target_agents\": [], \"reason\": \"Simple response, no specialists needed\"}\n"
+            "- The JSON MUST appear in your response\n\n"
+            "Legacy fallback line (include this too for compatibility):\n"
+            "[TARGET_AGENTS] coder-1, analyzer-1"
+        )
+        conn.execute(
+            "UPDATE agent_registry SET system_prompt=? WHERE id='router-1'",
+            (_NEW_ROUTER_PROMPT,)
+        )
+
         count = conn.execute("SELECT COUNT(*) as c FROM agent_registry").fetchone()["c"]
         if count == 0:
             seed_agents = [

@@ -16,6 +16,14 @@ import { getDefaultConfig, type NodeConfig, type AgentType } from "@/constants/a
 export type AgentStatus = "idle" | "running" | "done" | "error";
 export type PipelineStatus = "idle" | "running" | "done" | "stopped";
 export type ProviderType = "simulation" | "ollama" | "lmstudio" | "llamacpp" | "transformers";
+export type OrchestrationMode = "dag" | "langgraph";
+
+export type RetryInfo = {
+  agentId: string;
+  retryCount: number;
+  maxRetries: number;
+  reason: string;
+};
 
 export type { NodeConfig };
 
@@ -70,12 +78,15 @@ type PipelineState = {
   nodeConfigs: Record<string, NodeConfig>;
   activeParallelStage: ParallelStageInfo;
   registryAgents: any[];
+  orchestrationMode: OrchestrationMode;
+  retryInfo: RetryInfo | null;
 };
 
 type PipelineContextValue = PipelineState & {
   setPrompt: (p: string) => void;
   setUseRealModels: (v: boolean) => void;
   setProviderType: (p: ProviderType) => void;
+  setOrchestrationMode: (m: OrchestrationMode) => void;
   setSelectedNode: (info: SelectedNodeInfo) => void;
   setNodeConfig: (nodeId: string, patch: Partial<NodeConfig>) => void;
   resetNodeConfig: (nodeId: string, agentType?: AgentType) => void;
@@ -124,6 +135,8 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     nodeConfigs: {},
     activeParallelStage: null,
     registryAgents: [],
+    orchestrationMode: "dag",
+    retryInfo: null,
   });
 
   const abortRef = useRef<AbortController | null>(null);
@@ -168,6 +181,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   const setPrompt = useCallback((p: string) => setState((s) => ({ ...s, prompt: p })), []);
   const setUseRealModels = useCallback((v: boolean) => setState((s) => ({ ...s, useRealModels: v })), []);
   const setProviderType = useCallback((p: ProviderType) => setState((s) => ({ ...s, providerType: p })), []);
+  const setOrchestrationMode = useCallback((m: OrchestrationMode) => setState((s) => ({ ...s, orchestrationMode: m })), []);
   const setSelectedNode = useCallback((info: SelectedNodeInfo) => setState((s) => ({ ...s, selectedNode: info })), []);
 
   const setNodeConfig = useCallback((nodeId: string, patch: Partial<NodeConfig>) => {
@@ -231,6 +245,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           use_real_models: state.useRealModels,
           default_provider: { type: state.providerType },
           agent_configs: agentConfigs.length > 0 ? agentConfigs : undefined,
+          orchestration_mode: state.orchestrationMode,
         }),
         signal: abortRef.current.signal,
       });
@@ -264,7 +279,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.prompt, state.useRealModels, state.providerType, state.nodeConfigs]);
+  }, [state.prompt, state.useRealModels, state.providerType, state.nodeConfigs, state.orchestrationMode]);
 
   const handleEvent = useCallback((event: Record<string, unknown>) => {
     switch (event.type as string) {
@@ -377,11 +392,24 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         }));
         break;
 
+      case "langgraph_retry":
+        setState((s) => ({
+          ...s,
+          retryInfo: {
+            agentId: event.agentId as string,
+            retryCount: event.retryCount as number,
+            maxRetries: event.maxRetries as number,
+            reason: event.reason as string,
+          },
+        }));
+        break;
+
       case "pipeline_done":
         setState((s) => ({
           ...s,
           status: "done",
           activeParallelStage: null,
+          retryInfo: null,
           totalTokens: (event.totalPipelineTokens as number) ?? s.totalTokens,
           totalMs: (event.totalPipelineMs as number) ?? s.totalMs,
         }));
@@ -413,7 +441,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     <PipelineContext.Provider
       value={{
         ...state,
-        setPrompt, setUseRealModels, setProviderType,
+        setPrompt, setUseRealModels, setProviderType, setOrchestrationMode,
         setSelectedNode, setNodeConfig, resetNodeConfig,
         run, stop, reset,
       }}

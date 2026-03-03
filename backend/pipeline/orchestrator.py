@@ -10,6 +10,7 @@ from pipeline.models import RunRequest, ProviderConfig
 from providers.registry import registry
 from providers.base import BaseProvider
 from pipeline.tools import web_search
+from orchestration.pydantic_router import extract_target_agents  # Phase 12A
 import re
 
 logger = logging.getLogger(__name__)
@@ -81,8 +82,8 @@ Analyzing incoming request... Task classification in progress.
   Parallelizable   : YES (2 branches)
 
 [DECISION MATRIX]
-  → Code Writer   (confidence: 94%) — code generation required
-  → Analyzer      (confidence: 89%) — architecture review needed
+  → Coder    (confidence: 94%) — code generation required
+  → Analyzer (confidence: 89%) — architecture review needed
 
 [EXECUTION PLAN]
   Step 1 · Router      → classify & dispatch
@@ -90,6 +91,8 @@ Analyzing incoming request... Task classification in progress.
   Step 2 · Analyzer    → requirements analysis    ┘
   Step 3 · Validator   → quality & security checks
   Step 4 · Synthesizer → merge & deliver
+
+{"target_agents": ["coder-1", "analyzer-1"], "reason": "Code generation and architecture review both required for this task."}
 
 Dispatching to specialist agents. Pipeline initialized. ✓""",
 
@@ -164,6 +167,7 @@ Running validation suite...
   ✓ No SQL injection vectors
 
 [VERDICT]   APPROVED ✓
+VALIDATION: PASS
 Proceed with recommended hardening before production.""",
 
     "synthesizer": """\
@@ -248,11 +252,7 @@ def _resolve_provider(agent: dict, request: RunRequest) -> Optional[BaseProvider
 
     if cfg.type == "transformers":
         model_id = cfg.model_id or agent.get("hf_model", agent["model"])
-        return registry.get_transformers(
-            model_id=model_id,
-            load_in_4bit=cfg.load_in_4bit,
-            load_in_8bit=cfg.load_in_8bit,
-        )
+        return registry.get_transformers(model_id=model_id)
 
     model = cfg.model_id or agent["model"]
     return registry.get_openai_compat(
@@ -366,12 +366,16 @@ async def _run_single_agent(
         "provider": pname,
     })
 
-    # VRAM warmup
+    # VRAM warmup — 시뮬레이션: 기존 애니메이션 유지 / 실제 모델: 즉시 실측값 전송
     vram   = agent["vramGb"]
     warmup = agent["warmupSec"]
-    for i in range(1, 7):
-        await asyncio.sleep(warmup / 6)
-        yield sse({"type": "agent_vram", "agentId": agent_id, "vramGb": round(vram * i / 6, 2)})
+    if provider is None:
+        for i in range(1, 7):
+            await asyncio.sleep(warmup / 6)
+            yield sse({"type": "agent_vram", "agentId": agent_id, "vramGb": round(vram * i / 6, 2)})
+    else:
+        from providers.transformers_provider import TransformersProvider
+        yield sse({"type": "agent_vram", "agentId": agent_id, "vramGb": TransformersProvider.get_vram_allocated_gb()})
 
     # Token streaming
     agent_tokens = 0
@@ -494,13 +498,18 @@ async def _run_single_agent(
     previous_outputs[agent_id] = full_output
 
     latency_ms = int((time.time() - agent_start_t) * 1000)
+    if provider is not None:
+        from providers.transformers_provider import TransformersProvider
+        final_vram = TransformersProvider.get_vram_allocated_gb()
+    else:
+        final_vram = vram  # 시뮬레이션: 하드코딩 기본값
     yield sse({
         "type": "agent_done",
         "agentId": agent_id,
         "totalTokens": agent_tokens,
         "tokensPerSec": round(agent_tokens / max(latency_ms / 1000, 0.001), 1),
         "latencyMs": latency_ms,
-        "vramGb": vram,
+        "vramGb": final_vram,
         "provider": pname,
     })
 
@@ -513,15 +522,30 @@ async def _run_parallel_stage(
     prompt: str,
     request: RunRequest,
 ) -> AsyncGenerator[str, None]:
-    """Run multiple agents concurrently, merging their SSE streams."""
+    """에이전트 스테이지 실행.
+
+    시뮬레이션(use_real_models=False): asyncio 병렬 실행 (기존 동작 100% 유지)
+    실제 모델(use_real_models=True): 순차 실행 → VRAM OOM 방지 (Stage 2 ~15GB 위험)
+    """
+    if request.use_real_models:
+        # 순차 실행 — 실제 모델은 동시 로드 시 VRAM 초과 위험
+        logger.info(
+            "[orchestrator] Stage %s → sequential (real models, OOM prevention)",
+            [a["id"] for a in agents],
+        )
+        for agent in agents:
+            async for event_str in _run_single_agent(agent, previous_outputs, prompt, request):
+                yield event_str
+        return
+
+    # 시뮬레이션: 기존 asyncio 병렬 실행 (불변)
     queue: asyncio.Queue = asyncio.Queue()
 
     async def collect(agent: dict) -> None:
         async for event_str in _run_single_agent(agent, previous_outputs, prompt, request):
             await queue.put(event_str)
-        await queue.put(None)  # sentinel for this agent
+        await queue.put(None)  # sentinel
 
-    # Launch all agents in parallel
     tasks = [asyncio.create_task(collect(a)) for a in agents]
 
     done = 0
@@ -532,7 +556,6 @@ async def _run_parallel_stage(
         else:
             yield item
 
-    # Ensure all tasks completed (they should be by now)
     await asyncio.gather(*tasks)
 
 
@@ -544,6 +567,22 @@ async def run_pipeline(
 ) -> AsyncGenerator[str, None]:
     if request is None:
         request = RunRequest(prompt=prompt)
+
+    # ── Phase 12B: orchestration_mode 분기 ─────────────────────────────────────
+    mode = getattr(request, "orchestration_mode", "dag")
+    if mode == "langgraph":
+        try:
+            from orchestration.langgraph_engine import run_langgraph_pipeline
+            async for event_str in run_langgraph_pipeline(prompt, request):
+                yield event_str
+            return
+        except ImportError as e:
+            logger.warning("[orchestrator] langgraph not installed (%s), falling back to DAG", e)
+        except Exception as e:
+            logger.exception("[orchestrator] langgraph pipeline failed")
+            yield sse({"type": "pipeline_error", "message": f"LangGraph failed: {e}"})
+            return
+    # ── 기존 DAG 로직 (한 줄도 변경 없음) ────────────────────────────────────────
 
     pipeline_start    = time.time()
     previous_outputs: dict = {}
@@ -567,22 +606,16 @@ async def run_pipeline(
 
     router_output = previous_outputs.get("router-1", "")
     
-    # --- DYNAMIC ROUTING LOGIC ---
-    # Parse [TARGET_AGENTS] from router output
-    target_agents_str = ""
-    match = re.search(r'\[TARGET_AGENTS\](.*?)(?:\n|$)', router_output)
-    if match:
-        target_agents_str = match.group(1).lower()
-    
-    stage_2_agents = []
-    if "coder-1" in target_agents_str or "coder" in target_agents_str:
-        stage_2_agents.append("coder-1")
-    if "analyzer-1" in target_agents_str or "analyzer" in target_agents_str:
-        stage_2_agents.append("analyzer-1")
-        
-    # If no valid agents parsed but it's not explicitly "none", fallback to all
-    if not stage_2_agents and "none" not in target_agents_str:
-        stage_2_agents = ["coder-1", "analyzer-1"]
+    # --- DYNAMIC ROUTING LOGIC (Phase 12A: PydanticAI 가드레일) ---
+    # 3단계 파싱: JSON → regex → fallback
+    parsed_agents = extract_target_agents(
+        output=router_output,
+        structured_routing=getattr(request, "structured_routing", True),
+    )
+    if parsed_agents is None:
+        stage_2_agents = ["coder-1", "analyzer-1"]  # Stage 3: fallback
+    else:
+        stage_2_agents = parsed_agents               # Stage 1 or 2 성공
 
     dynamic_stages = []
     if stage_2_agents:
