@@ -82,3 +82,47 @@ def get_agent(agent_id: str) -> dict | None:
             "SELECT * FROM agent_registry WHERE id = ?", (agent_id,)
         ).fetchone()
         return dict(row) if row else None
+
+
+def create_agent(
+    agent_id: str,
+    name: str,
+    role: str,
+    provider_type: str,
+    model_id: str,
+    system_prompt: str,
+    max_tokens: int = 512,
+    temperature: float = 0.7,
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO agent_registry (id, name, role, provider_type, model_id, system_prompt, max_tokens, temperature) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (agent_id, name, role, provider_type, model_id, system_prompt, max_tokens, temperature),
+        )
+        conn.commit()
+
+
+def update_agent(
+    agent_id: str,
+    name: str,
+    role: str,
+    provider_type: str,
+    model_id: str,
+    system_prompt: str,
+    max_tokens: int,
+    temperature: float,
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE agent_registry SET name=?, role=?, provider_type=?, model_id=?, "
+            "system_prompt=?, max_tokens=?, temperature=? WHERE id=?",
+            (name, role, provider_type, model_id, system_prompt, max_tokens, temperature, agent_id),
+        )
+        conn.commit()
+
+
+def delete_agent(agent_id: str) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM agent_registry WHERE id=?", (agent_id,))
+        conn.commit()

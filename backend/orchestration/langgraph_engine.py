@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Any, AsyncGenerator, Optional, TYPE_CHECKING
 
@@ -120,8 +121,10 @@ async def node_route(state: GraphState) -> dict:
     await _run_agent_into_queue(AGENTS_BY_ID["router-1"], state, queue)
 
     router_output = state["previous_outputs"].get("router-1", "")
+    # Qwen3.5 Thinking Mode: <think>...</think> 태그 제거
+    router_output_clean = re.sub(r"<think>.*?</think>", "", router_output, flags=re.DOTALL).strip()
     parsed = extract_target_agents(
-        output=router_output,
+        output=router_output_clean,
         structured_routing=getattr(state["request"], "structured_routing", True),
     )
     stage_2 = parsed if parsed is not None else ["coder-1", "analyzer-1"]

@@ -62,6 +62,62 @@ def get_registry_agents():
     return {"agents": agents}
 
 
+# ─── Agent Registry CRUD ──────────────────────────────────────────────────────
+
+class AgentCreate(BaseModel):
+    id: str
+    name: str
+    role: str
+    provider_type: str
+    model_id: str
+    system_prompt: str
+    max_tokens: int = 512
+    temperature: float = 0.7
+
+
+class AgentUpdate(BaseModel):
+    name: str
+    role: str
+    provider_type: str
+    model_id: str
+    system_prompt: str
+    max_tokens: int
+    temperature: float
+
+
+@app.post("/api/registry/agents", status_code=201)
+def create_agent_endpoint(body: AgentCreate):
+    """신규 에이전트를 DB에 등록."""
+    if crud.get_agent(body.id):
+        raise HTTPException(status_code=409, detail=f"Agent '{body.id}' already exists")
+    crud.create_agent(
+        body.id, body.name, body.role, body.provider_type,
+        body.model_id, body.system_prompt, body.max_tokens, body.temperature,
+    )
+    return {"ok": True, "id": body.id}
+
+
+@app.put("/api/registry/agents/{agent_id}")
+def update_agent_endpoint(agent_id: str, body: AgentUpdate):
+    """기존 에이전트 정보 수정."""
+    if not crud.get_agent(agent_id):
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+    crud.update_agent(
+        agent_id, body.name, body.role, body.provider_type,
+        body.model_id, body.system_prompt, body.max_tokens, body.temperature,
+    )
+    return {"ok": True}
+
+
+@app.delete("/api/registry/agents/{agent_id}")
+def delete_agent_endpoint(agent_id: str):
+    """에이전트를 DB에서 삭제."""
+    if not crud.get_agent(agent_id):
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+    crud.delete_agent(agent_id)
+    return {"ok": True}
+
+
 # ─── Pipeline CRUD ────────────────────────────────────────────────────────────
 
 class PipelineSaveRequest(BaseModel):

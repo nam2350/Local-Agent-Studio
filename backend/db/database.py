@@ -50,12 +50,15 @@ def init_db() -> None:
         )
 
         # Phase 12A: router-1 system_prompt를 JSON 출력 요구사항 포함 버전으로 마이그레이션
+        # Phase Qwen3.5: Thinking Mode 비활성화 지시 추가
         _NEW_ROUTER_PROMPT = (
             "You are a task routing system. Analyze the user request and decide "
             "which specialist agents are needed.\n\n"
             "Available agents:\n"
             "- coder-1: code generation, programming, implementation tasks\n"
             "- analyzer-1: architecture review, security analysis, requirements\n\n"
+            "IMPORTANT: Do NOT output <think>...</think> thinking blocks. "
+            "Respond directly without any internal chain-of-thought.\n\n"
             "CRITICAL: You MUST output a JSON object somewhere in your response:\n"
             "{\"target_agents\": [\"coder-1\", \"analyzer-1\"], "
             "\"reason\": \"Brief explanation of routing decision\"}\n\n"
@@ -72,17 +75,46 @@ def init_db() -> None:
             (_NEW_ROUTER_PROMPT,)
         )
 
+        # Phase Qwen3.5: 모델 교체 마이그레이션 (router, analyzer, vision, synthesizer)
+        conn.execute(
+            "UPDATE agent_registry SET model_id=?, name=? WHERE id='router-1'",
+            ("Qwen/Qwen3.5-4B", "Qwen3.5 Router (4B)")
+        )
+        conn.execute(
+            "UPDATE agent_registry SET model_id=?, name=? WHERE id='analyzer-1'",
+            ("Qwen/Qwen3.5-4B", "Qwen3.5 Analyzer (4B)")
+        )
+        conn.execute(
+            "UPDATE agent_registry SET model_id=?, name=? WHERE id='vision-1'",
+            ("Qwen/Qwen3.5-0.8B", "Qwen3.5 Vision (0.8B)")
+        )
+        conn.execute(
+            "UPDATE agent_registry SET model_id=?, name=? WHERE id='synthesizer-1'",
+            ("Qwen/Qwen3.5-2B", "Qwen3.5 Synthesizer (2B)")
+        )
+
         count = conn.execute("SELECT COUNT(*) as c FROM agent_registry").fetchone()["c"]
         if count == 0:
             seed_agents = [
                 (
-                    "router-1", "Plano Orchestrator (4B)", "router", "transformers", "katanemo/Plano-Orchestrator-4B",
-                    "You are a task routing system. Analyze the user request briefly. "
-                    "Classify the task type, estimate complexity, and decide which specialist "
-                    "agents are needed: 'coder-1' (for coding/programming), 'analyzer-1' (for architecture/security review).\n\n"
-                    "CRITICAL: You MUST include a line exactly like this in your response:\n"
-                    "[TARGET_AGENTS] coder-1, analyzer-1\n"
-                    "If no specialists are needed (e.g. general chat), output: [TARGET_AGENTS] none",
+                    "router-1", "Qwen3.5 Router (4B)", "router", "transformers", "Qwen/Qwen3.5-4B",
+                    "You are a task routing system. Analyze the user request and decide "
+                    "which specialist agents are needed.\n\n"
+                    "Available agents:\n"
+                    "- coder-1: code generation, programming, implementation tasks\n"
+                    "- analyzer-1: architecture review, security analysis, requirements\n\n"
+                    "IMPORTANT: Do NOT output <think>...</think> thinking blocks. "
+                    "Respond directly without any internal chain-of-thought.\n\n"
+                    "CRITICAL: You MUST output a JSON object somewhere in your response:\n"
+                    "{\"target_agents\": [\"coder-1\", \"analyzer-1\"], "
+                    "\"reason\": \"Brief explanation of routing decision\"}\n\n"
+                    "Rules:\n"
+                    "- List only the agents actually needed for this task\n"
+                    "- If no specialists needed: "
+                    "{\"target_agents\": [], \"reason\": \"Simple response, no specialists needed\"}\n"
+                    "- The JSON MUST appear in your response\n\n"
+                    "Legacy fallback line (include this too for compatibility):\n"
+                    "[TARGET_AGENTS] coder-1, analyzer-1",
                     256, 0.3
                 ),
                 (
@@ -92,7 +124,7 @@ def init_db() -> None:
                     1024, 0.1
                 ),
                 (
-                    "analyzer-1", "Nanbeige Analyzer (3B)", "analyzer", "transformers", "heretic-org/Nanbeige4.1-3B-heretic",
+                    "analyzer-1", "Qwen3.5 Analyzer (4B)", "analyzer", "transformers", "Qwen/Qwen3.5-4B",
                     "You are a technical analyst. Review the task and any code provided. "
                     "Identify security issues, performance concerns, and give brief recommendations.",
                     512, 0.5
@@ -104,14 +136,14 @@ def init_db() -> None:
                     512, 0.2
                 ),
                 (
-                    "synthesizer-1", "Jan Synthesizer (4B)", "synthesizer", "transformers", "janhq/Jan-v3-4B-base-instruct",
+                    "synthesizer-1", "Qwen3.5 Synthesizer (2B)", "synthesizer", "transformers", "Qwen/Qwen3.5-2B",
                     "You are a technical writer. Synthesize the outputs from all agents into "
                     "a clear final summary. Include: implementation overview, quality score, "
                     "top recommendations. Be concise.",
                     768, 0.4
                 ),
                 (
-                    "vision-1", "LFM Vision (1.6B)", "vision", "transformers", "LiquidAI/LFM2.5-VL-1.6B",
+                    "vision-1", "Qwen3.5 Vision (0.8B)", "vision", "transformers", "Qwen/Qwen3.5-0.8B",
                     "You are an expert vision analyst. Analyze the provided image or UI and provide "
                     "feedback on accessibility, design, and structure.",
                     512, 0.4

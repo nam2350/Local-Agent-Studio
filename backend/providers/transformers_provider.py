@@ -229,12 +229,37 @@ class TransformersProvider(BaseProvider):
                 gen_thread = Thread(target=model.generate, kwargs=gen_kwargs, daemon=True)
                 gen_thread.start()
 
+                # Qwen3.5 Thinking Mode: <think>...</think> 블록 버퍼링으로 억제
+                _think_buf = ""
+                _in_think = False
                 for token_text in streamer:
-                    if token_text:
-                        future = asyncio.run_coroutine_threadsafe(
-                            token_queue.put(token_text), loop
-                        )
-                        future.result(timeout=10.0)
+                    if not token_text:
+                        continue
+                    _think_buf += token_text
+                    if "<think>" in _think_buf and not _in_think:
+                        _in_think = True
+                    if _in_think:
+                        if "</think>" in _think_buf:
+                            _in_think = False
+                            after = _think_buf.split("</think>", 1)[1]
+                            _think_buf = ""
+                            if after.strip():
+                                asyncio.run_coroutine_threadsafe(
+                                    token_queue.put(after), loop
+                                ).result(timeout=10.0)
+                        # </think> 미완성 → 계속 버퍼링 (토큰 전달 안 함)
+                        continue
+                    # thinking 블록 외부: 정상 전달
+                    out = _think_buf
+                    _think_buf = ""
+                    asyncio.run_coroutine_threadsafe(
+                        token_queue.put(out), loop
+                    ).result(timeout=10.0)
+                # 스트림 종료 후 잔여 버퍼 처리 (thinking 중이 아닐 때만)
+                if _think_buf and not _in_think:
+                    asyncio.run_coroutine_threadsafe(
+                        token_queue.put(_think_buf), loop
+                    ).result(timeout=10.0)
 
             except Exception as e:
                 logger.error("[Transformers] Generation error: %s", e, exc_info=True)

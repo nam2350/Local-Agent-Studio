@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import NodeConfigPanel from "@/components/canvas/NodeConfigPanel";
+import AgentEditorModal, { type AgentRecord } from "@/components/modals/AgentEditorModal";
 import {
   Activity,
   Cpu,
+  Eye,
   MemoryStick,
   Zap,
   Clock,
@@ -28,6 +30,8 @@ import {
   RefreshCw,
   Package,
   AlertTriangle,
+  Pencil,
+  Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePipeline, type AgentMetrics, type ProviderType } from "@/context/PipelineContext";
@@ -41,6 +45,19 @@ const AGENT_CONFIG = [
   { id: "validator-1",   label: "Validator",   icon: ShieldCheck, color: "#f59e0b", vramMax: 3.4 },
   { id: "synthesizer-1", label: "Synthesizer", icon: Layers,      color: "#10b981", vramMax: 6.0 },
 ];
+
+type RoleMeta = { icon: React.ComponentType<{ size?: number; color?: string }>; color: string; vramMax: number };
+
+const ROLE_META: Record<string, RoleMeta> = {
+  router:      { icon: GitBranch,    color: "#22d3ee", vramMax: 8 },
+  coder:       { icon: Code2,        color: "#a855f7", vramMax: 8 },
+  analyzer:    { icon: FlaskConical, color: "#f472b6", vramMax: 8 },
+  validator:   { icon: ShieldCheck,  color: "#f59e0b", vramMax: 8 },
+  synthesizer: { icon: Layers,       color: "#10b981", vramMax: 4 },
+  vision:      { icon: Eye,          color: "#3b82f6", vramMax: 2 },
+  assistant:   { icon: MessageSquare,color: "#64748b", vramMax: 2 },
+};
+const DEFAULT_ROLE_META: RoleMeta = { icon: Activity, color: "#64748b", vramMax: 4 };
 
 const PROVIDER_COLORS: Record<ProviderType, string> = {
   simulation:   "#64748b",
@@ -174,6 +191,127 @@ function AgentRow({
           <motion.div
             className="h-full rounded-full"
             style={{ background: `linear-gradient(90deg, transparent, ${config.color})` }}
+            animate={{ x: ["-100%", "100%"] }}
+            transition={{ duration: 1.2, repeat: Infinity, ease: "linear" }}
+          />
+        </motion.div>
+      )}
+    </motion.div>
+  );
+}
+
+// ─── DB 기반 에이전트 행 ──────────────────────────────────────────────────────
+
+function AgentRowDB({
+  agent,
+  meta,
+  metrics,
+  onEdit,
+}: {
+  agent: AgentRecord;
+  meta: RoleMeta;
+  metrics: AgentMetrics;
+  onEdit: () => void;
+}) {
+  const Icon = meta.icon;
+  const isRunning = metrics.status === "running";
+  const providerColor = PROVIDER_COLORS[metrics.provider as ProviderType] ?? "#64748b";
+  const providerLabel = PROVIDER_LABELS[metrics.provider as ProviderType] ?? "SIM";
+
+  return (
+    <motion.div
+      layout
+      className="group rounded-lg p-2.5"
+      style={{
+        background: `${meta.color}06`,
+        border: `1px solid ${meta.color}${isRunning ? "35" : "15"}`,
+        transition: "border-color 0.3s",
+      }}
+    >
+      {/* Header */}
+      <div className="flex items-center gap-2 mb-2">
+        <div
+          className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
+          style={{ background: `${meta.color}15` }}
+        >
+          <Icon size={12} color={meta.color} />
+        </div>
+        <span className="text-xs font-medium text-cyber-text flex-1 truncate">{agent.name}</span>
+        <div className="flex items-center gap-1.5">
+          {metrics.provider !== "simulation" && (
+            <span
+              className="text-[8px] font-bold px-1 rounded"
+              style={{ color: providerColor, background: `${providerColor}20` }}
+            >
+              {providerLabel}
+            </span>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); onEdit(); }}
+            className="opacity-0 group-hover:opacity-100 p-1 rounded transition-all hover:bg-white/10"
+            title="편집"
+          >
+            <Pencil size={9} color="#64748b" />
+          </button>
+          <StatusIcon status={metrics.status} />
+          <span
+            className="text-[10px] font-mono"
+            style={{
+              color:
+                metrics.status === "running" ? meta.color :
+                metrics.status === "done"    ? "#10b981" :
+                "#64748b",
+            }}
+          >
+            {metrics.status}
+          </span>
+        </div>
+      </div>
+
+      {/* Model ID */}
+      <p className="text-[9px] text-cyber-subtle font-mono truncate mb-2" title={agent.model_id}>
+        {agent.model_id}
+      </p>
+
+      {/* Metrics grid */}
+      <div className="grid grid-cols-3 gap-1.5 mb-2">
+        <div>
+          <p className="text-[9px] text-cyber-subtle uppercase tracking-wider mb-0.5">T/s</p>
+          <p className="text-[11px] font-mono font-semibold" style={{ color: isRunning ? meta.color : "#64748b" }}>
+            {metrics.tokensPerSec > 0 ? metrics.tokensPerSec.toFixed(1) : "—"}
+          </p>
+        </div>
+        <div>
+          <p className="text-[9px] text-cyber-subtle uppercase tracking-wider mb-0.5">Latency</p>
+          <p className="text-[11px] font-mono font-semibold text-cyber-muted">
+            {metrics.latencyMs > 0 ? `${(metrics.latencyMs / 1000).toFixed(1)}s` : "—"}
+          </p>
+        </div>
+        <div>
+          <p className="text-[9px] text-cyber-subtle uppercase tracking-wider mb-0.5">Tokens</p>
+          <p className="text-[11px] font-mono font-semibold text-cyber-text">
+            {metrics.tokens > 0 ? metrics.tokens.toLocaleString() : "—"}
+          </p>
+        </div>
+      </div>
+
+      {/* VRAM */}
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[9px] text-cyber-subtle uppercase tracking-wider">VRAM</span>
+          <span className="text-[9px] font-mono" style={{ color: meta.color }}>
+            {metrics.vramGb.toFixed(1)} / {meta.vramMax} GB
+          </span>
+        </div>
+        <VramBar used={metrics.vramGb} max={meta.vramMax} color={meta.color} />
+      </div>
+
+      {/* Running progress bar */}
+      {isRunning && (
+        <motion.div className="mt-2 h-0.5 rounded-full overflow-hidden bg-white/[0.04]">
+          <motion.div
+            className="h-full rounded-full"
+            style={{ background: `linear-gradient(90deg, transparent, ${meta.color})` }}
             animate={{ x: ["-100%", "100%"] }}
             transition={{ duration: 1.2, repeat: Infinity, ease: "linear" }}
           />
@@ -911,6 +1049,23 @@ export default function RightPanel() {
   const { agentMetrics, totalTokens, totalMs, status, selectedNode, activeParallelStage } = usePipeline();
   const [uptime, setUptime] = useState(0);
   const [activeTab, setActiveTab] = useState<"agents" | "output" | "metrics" | "providers" | "models">("agents");
+  const [registryAgents, setRegistryAgents] = useState<AgentRecord[]>([]);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingAgent, setEditingAgent] = useState<AgentRecord | undefined>(undefined);
+
+  const fetchAgents = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND}/api/registry/agents`);
+      if (res.ok) {
+        const data = await res.json();
+        setRegistryAgents(data.agents ?? []);
+      }
+    } catch { /* backend offline */ }
+  }, []);
+
+  useEffect(() => {
+    fetchAgents();
+  }, [fetchAgents]);
 
   useEffect(() => {
     const t = setInterval(() => setUptime((s) => s + 1), 1000);
@@ -980,7 +1135,7 @@ export default function RightPanel() {
           { label: "Tokens",      value: totalTokens > 0 ? totalTokens.toLocaleString() : "—", icon: MessageSquare, color: "#22d3ee" },
           { label: "Avg Latency", value: avgLatency > 0 ? `${(avgLatency / 1000).toFixed(1)}s` : "—", icon: Clock, color: "#a855f7" },
           { label: "VRAM",        value: totalVram > 0 ? `${totalVram.toFixed(1)} GB` : "—", icon: MemoryStick, color: "#f472b6" },
-          { label: "Active",      value: `${activeAgentCount} / ${AGENT_CONFIG.length}`, icon: Activity, color: "#10b981" },
+          { label: "Active",      value: `${activeAgentCount} / ${registryAgents.length || AGENT_CONFIG.length}`, icon: Activity, color: "#10b981" },
         ].map(({ label, value, icon: Icon, color }) => (
           <div
             key={label}
@@ -1097,8 +1252,21 @@ export default function RightPanel() {
                 </motion.div>
               )}
 
-              {AGENT_CONFIG.map((cfg, i) => {
-                const m = agentMetrics[cfg.id] ?? {
+              {/* 에이전트 추가 버튼 */}
+              <motion.button
+                onClick={() => { setEditingAgent(undefined); setEditorOpen(true); }}
+                whileHover={{ scale: 1.01 }}
+                whileTap={{ scale: 0.99 }}
+                className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[10px] text-cyber-muted hover:text-cyber-text transition-colors"
+                style={{ border: "1px dashed rgba(255,255,255,0.12)" }}
+              >
+                <Plus size={10} />
+                Add Agent
+              </motion.button>
+
+              {registryAgents.map((agent, i) => {
+                const meta = ROLE_META[agent.role] ?? DEFAULT_ROLE_META;
+                const m = agentMetrics[agent.id] ?? {
                   status: "idle" as const,
                   tokens: 0,
                   tokensPerSec: 0,
@@ -1109,12 +1277,17 @@ export default function RightPanel() {
                 };
                 return (
                   <motion.div
-                    key={cfg.id}
+                    key={agent.id}
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: i * 0.05 }}
+                    transition={{ delay: i * 0.04 }}
                   >
-                    <AgentRow config={cfg} metrics={m} />
+                    <AgentRowDB
+                      agent={agent}
+                      meta={meta}
+                      metrics={m}
+                      onEdit={() => { setEditingAgent(agent); setEditorOpen(true); }}
+                    />
                   </motion.div>
                 );
               })}
@@ -1188,7 +1361,7 @@ export default function RightPanel() {
                       label: "Throughput",
                       value: totalMs > 0 ? `${(totalTokens / (totalMs / 1000)).toFixed(1)} T/s` : "—",
                     },
-                    { label: "Agents Run",   value: `${doneCount} / ${AGENT_CONFIG.length}` },
+                    { label: "Agents Run",   value: `${doneCount} / ${registryAgents.length || AGENT_CONFIG.length}` },
                   ].map(({ label, value }) => (
                     <div
                       key={label}
@@ -1251,6 +1424,14 @@ export default function RightPanel() {
           </span>
         </div>
       </div>
+
+      {/* Agent Editor Modal */}
+      <AgentEditorModal
+        open={editorOpen}
+        onClose={() => setEditorOpen(false)}
+        agent={editingAgent}
+        onSaved={fetchAgents}
+      />
     </motion.aside>
   );
 }

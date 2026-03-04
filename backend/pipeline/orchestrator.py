@@ -74,6 +74,11 @@ FALLBACK_STAGES: list[list[str]] = [
 
 _ROLE_SIM_OUTPUTS: dict[str, str] = {
     "router": """\
+<think>
+The task involves both code generation and architectural analysis.
+I need to dispatch to coder-1 for implementation and analyzer-1 for review.
+</think>
+
 Analyzing incoming request... Task classification in progress.
 
 [ROUTING ENGINE]
@@ -328,7 +333,9 @@ def _build_agent_input(prompt: str, agent_id: str, previous: dict) -> str:
         return prompt
     ctx_parts = [f"Original task: {prompt}"]
     for prev_id, prev_out in previous.items():
-        ctx_parts.append(f"\n--- {prev_id} output ---\n{str(prev_out)[:800]}")
+        # Qwen3.5 Thinking Mode: thinking 태그 제거 후 컨텍스트에 포함
+        cleaned_out = re.sub(r"<think>.*?</think>", "", str(prev_out), flags=re.DOTALL).strip()
+        ctx_parts.append(f"\n--- {prev_id} output ---\n{cleaned_out[:800]}")
     return "\n".join(ctx_parts)
 
 
@@ -605,11 +612,14 @@ async def run_pipeline(
         yield event_str
 
     router_output = previous_outputs.get("router-1", "")
-    
+
+    # Qwen3.5 Thinking Mode: <think>...</think> 태그 제거 후 파싱
+    router_output_clean = re.sub(r"<think>.*?</think>", "", router_output, flags=re.DOTALL).strip()
+
     # --- DYNAMIC ROUTING LOGIC (Phase 12A: PydanticAI 가드레일) ---
     # 3단계 파싱: JSON → regex → fallback
     parsed_agents = extract_target_agents(
-        output=router_output,
+        output=router_output_clean,
         structured_routing=getattr(request, "structured_routing", True),
     )
     if parsed_agents is None:
