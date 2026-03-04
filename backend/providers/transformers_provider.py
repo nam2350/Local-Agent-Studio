@@ -155,7 +155,7 @@ class TransformersProvider(BaseProvider):
         base_kwargs: dict = {
             "device_map": self._device,
             "trust_remote_code": True,
-            "torch_dtype": torch.float16,
+            "dtype": torch.float16,
         }
 
         # SDPA 우선 시도, 미지원 모델이면 기본 attention으로 fallback

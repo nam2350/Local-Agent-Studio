@@ -18,13 +18,40 @@ import {
   MarkerType,
   ReactFlowProvider,
 } from "@xyflow/react";
+import dagre from "@dagrejs/dagre";
 import { motion } from "framer-motion";
+import { LayoutDashboard } from "lucide-react";
 import { usePipeline } from "@/context/PipelineContext";
 import { useCanvasBridge } from "@/context/CanvasBridgeContext";
 import AgentNode, { type AgentNodeData } from "./AgentNode";
+import AnimatedEdge from "./AnimatedEdge";
 import type { AgentType } from "@/constants/agentDefaults";
 
 const nodeTypes = { agentNode: AgentNode };
+const edgeTypes = { default: AnimatedEdge };
+
+// ─── Dagre auto-layout ────────────────────────────────────────────────────────
+
+const NODE_W = 200;
+const NODE_H = 90;
+
+function getAutoLayout(nodes: Node[], edges: Edge[]): Node[] {
+  const g = new dagre.graphlib.Graph();
+  g.setDefaultEdgeLabel(() => ({}));
+  g.setGraph({ rankdir: "LR", nodesep: 90, ranksep: 160, marginx: 60, marginy: 60 });
+
+  nodes.forEach((n) => g.setNode(n.id, { width: NODE_W, height: NODE_H }));
+  edges.forEach((e) => g.setEdge(e.source, e.target));
+
+  dagre.layout(g);
+
+  return nodes.map((n) => {
+    const pos = g.node(n.id);
+    return pos
+      ? { ...n, position: { x: pos.x - NODE_W / 2, y: pos.y - NODE_H / 2 } }
+      : n;
+  });
+}
 
 type AgentFlowNode = Node<AgentNodeData>;
 
@@ -111,9 +138,15 @@ function CanvasInner() {
   const [nodes, setNodes, onNodesChange] = useNodesState<AgentFlowNode>(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const { agentMetrics, status, setSelectedNode } = usePipeline();
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, fitView } = useReactFlow();
   const { getStateRef, setStateRef } = useCanvasBridge();
   const nodeCounter = useRef(100);
+
+  // ── Auto-layout ───────────────────────────────────────────────────────────
+  const handleAutoLayout = useCallback(() => {
+    setNodes((nds) => getAutoLayout(nds, edges) as AgentFlowNode[]);
+    setTimeout(() => fitView({ padding: 0.15, duration: 450 }), 50);
+  }, [setNodes, edges, fitView]);
 
   // ── Register canvas bridge callbacks ─────────────────────────────────────
   getStateRef.current = () => ({ nodes, edges });
@@ -280,8 +313,8 @@ function CanvasInner() {
       transition={{ duration: 0.4 }}
     >
       {/* Overlay info */}
-      <div className="absolute top-4 left-4 z-10 flex items-center gap-2 pointer-events-none">
-        <div className="glass px-3 py-1.5 rounded-lg flex items-center gap-2">
+      <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
+        <div className="glass px-3 py-1.5 rounded-lg flex items-center gap-2 pointer-events-none">
           <div
             className="w-1.5 h-1.5 rounded-full"
             style={{
@@ -296,6 +329,19 @@ function CanvasInner() {
             )}
           </span>
         </div>
+
+        {/* Auto-layout 버튼 */}
+        <motion.button
+          onClick={handleAutoLayout}
+          whileHover={{ scale: 1.06 }}
+          whileTap={{ scale: 0.94 }}
+          title="Auto Layout (Dagre)"
+          className="glass flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] text-cyber-muted hover:text-cyber-cyan transition-colors"
+          style={{ border: "1px solid rgba(34,211,238,0.15)" }}
+        >
+          <LayoutDashboard size={11} />
+          Auto Layout
+        </motion.button>
       </div>
 
       <ReactFlow
@@ -309,6 +355,7 @@ function CanvasInner() {
         onNodeClick={onNodeClick}
         onPaneClick={onPaneClick}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         fitView
         fitViewOptions={{ padding: 0.15 }}
         minZoom={0.25}
