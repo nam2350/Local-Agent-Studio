@@ -30,6 +30,8 @@ class RunRequest(BaseModel):
     # "dag"       — 기존 DAG 파이프라인 (완전 불변, 기본값)
     # "langgraph" — LangGraph StateGraph (Validator 루프백 포함)
     orchestration_mode: Literal["dag", "langgraph"] = "dag"
+    # Phase 13: 대화 세션 ID (None이면 저장 안 함)
+    session_id: Optional[str] = None
 
 
 class PipelineEvent(BaseModel):

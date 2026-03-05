@@ -594,6 +594,34 @@ async def run_pipeline(
     pipeline_start    = time.time()
     previous_outputs: dict = {}
     agent_tokens_map: dict = {}   # agent_id → total tokens (from agent_done events)
+    agent_stats_map: dict  = {}   # agent_id → {tokens, latency_ms, vram_gb}
+
+    # Phase 13: 대화 이력 컨텍스트 주입 (router-1 입력에만)
+    router_prompt = prompt
+    session_id = getattr(request, "session_id", None)
+    if session_id:
+        try:
+            from db import crud as _crud
+            turns = _crud.list_turns(session_id)
+            if turns:
+                history_parts = []
+                for t in turns[-3:]:  # 최근 3턴만
+                    outputs = _crud.list_agent_outputs(t["id"])
+                    synth = next((o for o in outputs if o["role"] == "synthesizer"), None)
+                    summary = synth["full_output"][:400] if synth else ""
+                    history_parts.append(
+                        f"Turn {t['turn_index'] + 1}: User asked: {t['user_prompt'][:100]}"
+                        + (f"\nSummary: {summary}" if summary else "")
+                    )
+                if history_parts:
+                    router_prompt = (
+                        "=== Previous conversation ===\n"
+                        + "\n---\n".join(history_parts)
+                        + "\n=== Current request ===\n"
+                        + prompt
+                    )
+        except Exception as e:
+            logger.warning("[orchestrator] conversation history load failed: %s", e)
 
     # Count total agents roughly (will adjust later)
     yield sse({
@@ -604,11 +632,17 @@ async def run_pipeline(
 
     # --- STAGE 1: ROUTER ---
     stage_idx = 0
-    gen_router = _run_single_agent(AGENTS_BY_ID["router-1"], previous_outputs, prompt, request)
+    gen_router = _run_single_agent(AGENTS_BY_ID["router-1"], previous_outputs, router_prompt, request)
     async for event_str in gen_router:
         parsed = _parse_sse(event_str)
         if parsed and parsed.get("type") == "agent_done":
-            agent_tokens_map[parsed["agentId"]] = parsed.get("totalTokens", 0)
+            aid = parsed["agentId"]
+            agent_tokens_map[aid] = parsed.get("totalTokens", 0)
+            agent_stats_map[aid] = {
+                "tokens": parsed.get("totalTokens", 0),
+                "latency_ms": parsed.get("latencyMs", 0),
+                "vram_gb": parsed.get("vramGb", 0.0),
+            }
         yield event_str
 
     router_output = previous_outputs.get("router-1", "")
@@ -659,7 +693,13 @@ async def run_pipeline(
             # Track token totals from agent_done events
             parsed = _parse_sse(event_str)
             if parsed and parsed.get("type") == "agent_done":
-                agent_tokens_map[parsed["agentId"]] = parsed.get("totalTokens", 0)
+                aid = parsed["agentId"]
+                agent_tokens_map[aid] = parsed.get("totalTokens", 0)
+                agent_stats_map[aid] = {
+                    "tokens": parsed.get("totalTokens", 0),
+                    "latency_ms": parsed.get("latencyMs", 0),
+                    "vram_gb": parsed.get("vramGb", 0.0),
+                }
             yield event_str
 
         # Brief pause between stages
@@ -674,3 +714,30 @@ async def run_pipeline(
         "totalPipelineTokens": total_tokens,
         "totalPipelineMs": total_ms,
     })
+
+    # Phase 13: 대화 세션에 턴 저장
+    if session_id:
+        try:
+            from db import crud as _crud2
+            if not _crud2.get_session(session_id):
+                title = prompt[:60] + ("..." if len(prompt) > 60 else "")
+                _crud2.create_session(session_id, title)
+            turn_idx = _crud2.get_session_turn_count(session_id)
+            mode = getattr(request, "orchestration_mode", "dag")
+            turn_id = _crud2.create_turn(session_id, turn_idx, prompt, mode)
+            for aid, output_text in previous_outputs.items():
+                stats = agent_stats_map.get(aid, {})
+                agent_rec = _crud2.get_agent(aid)
+                role = agent_rec["role"] if agent_rec else "assistant"
+                _crud2.create_agent_output(
+                    turn_id=turn_id,
+                    agent_id=aid,
+                    role=role,
+                    full_output=output_text,
+                    token_count=stats.get("tokens", 0),
+                    latency_ms=stats.get("latency_ms", 0),
+                    vram_gb=stats.get("vram_gb", 0.0),
+                )
+            logger.info("[orchestrator] Saved turn %d for session %s", turn_idx, session_id)
+        except Exception as e:
+            logger.warning("[orchestrator] Failed to save conversation turn: %s", e)

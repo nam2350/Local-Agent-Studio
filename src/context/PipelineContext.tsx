@@ -80,6 +80,8 @@ type PipelineState = {
   registryAgents: any[];
   orchestrationMode: OrchestrationMode;
   retryInfo: RetryInfo | null;
+  // Phase 13: 대화 세션
+  sessionId: string | null;
 };
 
 type PipelineContextValue = PipelineState & {
@@ -90,6 +92,7 @@ type PipelineContextValue = PipelineState & {
   setSelectedNode: (info: SelectedNodeInfo) => void;
   setNodeConfig: (nodeId: string, patch: Partial<NodeConfig>) => void;
   resetNodeConfig: (nodeId: string, agentType?: AgentType) => void;
+  setSessionId: (id: string | null) => void;
   run: () => void;
   stop: () => void;
   reset: () => void;
@@ -137,6 +140,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     registryAgents: [],
     orchestrationMode: "dag",
     retryInfo: null,
+    sessionId: null,
   });
 
   const abortRef = useRef<AbortController | null>(null);
@@ -183,6 +187,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   const setProviderType = useCallback((p: ProviderType) => setState((s) => ({ ...s, providerType: p })), []);
   const setOrchestrationMode = useCallback((m: OrchestrationMode) => setState((s) => ({ ...s, orchestrationMode: m })), []);
   const setSelectedNode = useCallback((info: SelectedNodeInfo) => setState((s) => ({ ...s, selectedNode: info })), []);
+  const setSessionId = useCallback((id: string | null) => setState((s) => ({ ...s, sessionId: id })), []);
 
   const setNodeConfig = useCallback((nodeId: string, patch: Partial<NodeConfig>) => {
     setState((s) => ({
@@ -246,6 +251,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           default_provider: { type: state.providerType },
           agent_configs: agentConfigs.length > 0 ? agentConfigs : undefined,
           orchestration_mode: state.orchestrationMode,
+          session_id: state.sessionId,
         }),
         signal: abortRef.current.signal,
       });
@@ -279,7 +285,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.prompt, state.useRealModels, state.providerType, state.nodeConfigs, state.orchestrationMode]);
+  }, [state.prompt, state.useRealModels, state.providerType, state.nodeConfigs, state.orchestrationMode, state.sessionId]);
 
   const handleEvent = useCallback((event: Record<string, unknown>) => {
     switch (event.type as string) {
@@ -442,7 +448,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       value={{
         ...state,
         setPrompt, setUseRealModels, setProviderType, setOrchestrationMode,
-        setSelectedNode, setNodeConfig, resetNodeConfig,
+        setSelectedNode, setNodeConfig, resetNodeConfig, setSessionId,
         run, stop, reset,
       }}
     >

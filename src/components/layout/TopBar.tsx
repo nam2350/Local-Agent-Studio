@@ -16,9 +16,12 @@ import {
   Send,
   Cpu,
   GitBranch,
+  MessageSquare,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePipeline, type ProviderType, type OrchestrationMode } from "@/context/PipelineContext";
+import { useCallback } from "react";
 import SavePipelineModal from "@/components/modals/SavePipelineModal";
 import LoadPipelineModal from "@/components/modals/LoadPipelineModal";
 
@@ -53,7 +56,13 @@ export default function TopBar() {
     providerStatus,
     orchestrationMode, setOrchestrationMode,
     retryInfo,
+    sessionId, setSessionId,
   } = usePipeline();
+
+  const newSession = useCallback(() => {
+    const id = crypto.randomUUID();
+    setSessionId(id);
+  }, [setSessionId]);
 
   const [showTemplates, setShowTemplates] = useState(false);
   const [showProviders, setShowProviders] = useState(false);
@@ -433,6 +442,38 @@ export default function TopBar() {
 
       {/* Spacer */}
       <div className="flex-1" />
+
+      {/* Session button */}
+      <div className="flex-shrink-0">
+        {sessionId ? (
+          <div
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs"
+            style={{ border: "1px solid rgba(34,211,238,0.25)", background: "rgba(34,211,238,0.06)", color: "#22d3ee" }}
+          >
+            <MessageSquare size={11} />
+            <span className="font-mono" title={sessionId}>
+              {sessionId.slice(0, 8)}
+            </span>
+            <button
+              onClick={() => setSessionId(null)}
+              className="hover:text-cyber-red transition-colors ml-0.5"
+              title="세션 종료"
+            >
+              <X size={10} />
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={newSession}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-cyber-muted hover:text-cyber-cyan transition-colors duration-150"
+            style={{ border: "1px solid rgba(255,255,255,0.06)" }}
+            title="새 대화 세션 시작"
+          >
+            <MessageSquare size={11} />
+            <span>New Session</span>
+          </button>
+        )}
+      </div>
 
       {/* Right actions */}
       <div className="flex items-center gap-1 flex-shrink-0">

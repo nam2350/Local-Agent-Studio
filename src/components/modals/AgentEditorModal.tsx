@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Bot, X, Loader2, CheckCircle2, Trash2 } from "lucide-react";
+import { Bot, X, Loader2, CheckCircle2, Trash2, ChevronDown } from "lucide-react";
+import { usePipeline } from "@/context/PipelineContext";
 
 const BACKEND = "http://localhost:8000";
 
@@ -45,6 +46,13 @@ export default function AgentEditorModal({ open, onClose, agent, onSaved }: Prop
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const { availableModels } = usePipeline();
+
+  const dynamicModelOptions: string[] = useMemo(() => {
+    const pType = form.provider_type as keyof typeof availableModels;
+    return Array.isArray(availableModels[pType]) ? availableModels[pType] : [];
+  }, [form.provider_type, availableModels]);
+
   // 모달이 열릴 때 폼 초기화
   useEffect(() => {
     if (open) {
@@ -73,10 +81,10 @@ export default function AgentEditorModal({ open, onClose, agent, onSaved }: Prop
       const method = isEdit ? "PUT" : "POST";
       const body = isEdit
         ? {
-            name: form.name, role: form.role, provider_type: form.provider_type,
-            model_id: form.model_id, system_prompt: form.system_prompt,
-            max_tokens: form.max_tokens, temperature: form.temperature,
-          }
+          name: form.name, role: form.role, provider_type: form.provider_type,
+          model_id: form.model_id, system_prompt: form.system_prompt,
+          max_tokens: form.max_tokens, temperature: form.temperature,
+        }
         : form;
 
       const res = await fetch(url, {
@@ -270,15 +278,41 @@ export default function AgentEditorModal({ open, onClose, agent, onSaved }: Prop
                   <label className="text-[10px] text-cyber-muted uppercase tracking-wider mb-1.5 block">
                     Model ID <span className="text-cyber-red">*</span>
                   </label>
-                  <input
-                    value={form.model_id}
-                    onChange={(e) => set("model_id", e.target.value)}
-                    placeholder="예: Qwen/Qwen3.5-4B, llama3.2:3b"
-                    className={inputCls}
-                    style={inputStyle}
-                    onFocus={focusHandler}
-                    onBlur={blurHandler}
-                  />
+                  {dynamicModelOptions.length > 0 ? (
+                    <div className="relative">
+                      <select
+                        value={form.model_id}
+                        onChange={(e) => set("model_id", e.target.value)}
+                        className={inputCls}
+                        style={{ ...inputStyle, cursor: "pointer", appearance: "none" }}
+                        onFocus={focusHandler}
+                        onBlur={blurHandler}
+                      >
+                        <option value="" disabled style={{ background: "#0b1025" }}>
+                          모델을 선택하세요...
+                        </option>
+                        {dynamicModelOptions.map((m) => (
+                          <option key={m} value={m} style={{ background: "#0b1025" }}>
+                            {m}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown
+                        size={11}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-cyber-muted pointer-events-none"
+                      />
+                    </div>
+                  ) : (
+                    <input
+                      value={form.model_id}
+                      onChange={(e) => set("model_id", e.target.value)}
+                      placeholder="예: Qwen/Qwen3.5-4B, llama3.2:3b"
+                      className={inputCls}
+                      style={inputStyle}
+                      onFocus={focusHandler}
+                      onBlur={blurHandler}
+                    />
+                  )}
                 </div>
 
                 {/* System Prompt */}

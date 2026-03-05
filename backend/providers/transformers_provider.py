@@ -6,6 +6,12 @@ Phase 16 변경사항:
 - VRAM 실측 static 메서드 (get_vram_allocated_gb, get_vram_info)
 - 모듈 레벨 unload_model() / unload_all_models() 함수
 - Thread 내 CUDA OOM → asyncio 루프로 에러 시그널 전파 개선
+
+Phase 14 변경사항 (Vision/VL 지원):
+- config.json에 vision_config가 있으면 자동으로 VL 모델로 감지
+- VL 모델: AutoProcessor + AutoModelForImageTextToText 사용
+- TextIteratorStreamer에 내부 tokenizer 전달
+- 텍스트 전용 입력도 VL message format [{type: text, text: ...}]으로 변환
 """
 
 import asyncio
@@ -19,9 +25,10 @@ from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
 
-# 모듈 레벨 캐시: model_id → model / tokenizer
+# 모듈 레벨 캐시: model_id → model / tokenizer / is_vl
 _model_cache: dict = {}
 _tokenizer_cache: dict = {}
+_is_vl_cache: dict = {}  # model_id → bool (True: VL processor, False: text tokenizer)
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="transformers")
 
 
@@ -51,6 +58,7 @@ def unload_model(model_id: str) -> bool:
 
     model = _model_cache.pop(model_id)
     _tokenizer_cache.pop(model_id, None)
+    _is_vl_cache.pop(model_id, None)
 
     try:
         model.cpu()
@@ -135,22 +143,39 @@ class TransformersProvider(BaseProvider):
         except ImportError:
             return self._model_id
 
+    @staticmethod
+    def _detect_vl(load_path: str) -> bool:
+        """config.json에 vision_config가 있으면 VL 모델로 판단."""
+        try:
+            import json
+            from pathlib import Path
+            cfg_path = Path(load_path) / "config.json"
+            if cfg_path.exists():
+                with open(cfg_path) as f:
+                    cfg = json.load(f)
+                return "vision_config" in cfg
+        except Exception:
+            pass
+        return False
+
     def _load_model(self):
-        """fp16 + SDPA로 모델 로드 (blocking — Thread 내에서 실행)."""
+        """fp16 + SDPA로 모델 로드 (blocking — Thread 내에서 실행).
+
+        VL 모델(vision_config 포함): AutoProcessor + AutoModelForImageTextToText
+        텍스트 모델: AutoTokenizer + AutoModelForCausalLM
+        """
         if self._model_id in _model_cache:
             return _model_cache[self._model_id], _tokenizer_cache[self._model_id]
 
         load_path = self._resolve_load_path()
-        logger.info(
-            "[Transformers] Loading '%s' from '%s' (fp16) ...",
-            self._model_id, load_path,
-        )
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-        import torch
+        is_vl = self._detect_vl(load_path)
+        _is_vl_cache[self._model_id] = is_vl
 
-        tokenizer = AutoTokenizer.from_pretrained(load_path, trust_remote_code=True)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        logger.info(
+            "[Transformers] Loading '%s' from '%s' (fp16, %s) ...",
+            self._model_id, load_path, "VL" if is_vl else "text",
+        )
+        import torch
 
         base_kwargs: dict = {
             "device_map": self._device,
@@ -158,17 +183,32 @@ class TransformersProvider(BaseProvider):
             "dtype": torch.float16,
         }
 
-        # SDPA 우선 시도, 미지원 모델이면 기본 attention으로 fallback
-        try:
-            model = AutoModelForCausalLM.from_pretrained(
-                load_path, attn_implementation="sdpa", **base_kwargs
-            )
-            logger.info("[Transformers] '%s' loaded with SDPA attention", self._model_id)
-        except (ValueError, TypeError, NotImplementedError) as e:
-            logger.warning(
-                "[Transformers] SDPA not supported (%s), falling back to default attention", e
-            )
-            model = AutoModelForCausalLM.from_pretrained(load_path, **base_kwargs)
+        if is_vl:
+            from transformers import AutoProcessor, AutoModelForImageTextToText
+            tokenizer = AutoProcessor.from_pretrained(load_path, trust_remote_code=True)
+            try:
+                model = AutoModelForImageTextToText.from_pretrained(
+                    load_path, attn_implementation="sdpa", **base_kwargs
+                )
+                logger.info("[Transformers] '%s' loaded (VL, SDPA)", self._model_id)
+            except (ValueError, TypeError, NotImplementedError) as e:
+                logger.warning("[Transformers] VL SDPA fallback: %s", e)
+                model = AutoModelForImageTextToText.from_pretrained(load_path, **base_kwargs)
+        else:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(load_path, trust_remote_code=True)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+            try:
+                model = AutoModelForCausalLM.from_pretrained(
+                    load_path, attn_implementation="sdpa", **base_kwargs
+                )
+                logger.info("[Transformers] '%s' loaded with SDPA attention", self._model_id)
+            except (ValueError, TypeError, NotImplementedError) as e:
+                logger.warning(
+                    "[Transformers] SDPA not supported (%s), falling back to default attention", e
+                )
+                model = AutoModelForCausalLM.from_pretrained(load_path, **base_kwargs)
 
         model.eval()
         _model_cache[self._model_id] = model
@@ -196,26 +236,43 @@ class TransformersProvider(BaseProvider):
         def run_generation():
             try:
                 model, tokenizer = self._load_model()
+                is_vl = _is_vl_cache.get(self._model_id, False)
 
-                # 채팅 템플릿 적용
-                if getattr(tokenizer, "chat_template", None):
+                if is_vl:
+                    # VL 모델: content를 [{type: text, text: ...}] 형태로 전달
                     messages = []
                     if system_prompt:
-                        messages.append({"role": "system", "content": system_prompt})
-                    messages.append({"role": "user", "content": prompt})
+                        messages.append({"role": "system", "content": [{"type": "text", "text": system_prompt}]})
+                    messages.append({"role": "user", "content": [{"type": "text", "text": prompt}]})
                     text = tokenizer.apply_chat_template(
                         messages, tokenize=False, add_generation_prompt=True
                     )
+                    inputs = tokenizer(text=text, return_tensors="pt", truncation=True, max_length=2048)
+                    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+                    # VL Processor의 내부 tokenizer를 TextIteratorStreamer에 전달
+                    streamer_tok = tokenizer.tokenizer
+                    pad_id = tokenizer.tokenizer.eos_token_id
                 else:
-                    text = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-
-                inputs = tokenizer(
-                    text, return_tensors="pt", truncation=True, max_length=2048
-                )
-                inputs = {k: v.to(model.device) for k, v in inputs.items()}
+                    # 텍스트 모델: 기존 로직
+                    if getattr(tokenizer, "chat_template", None):
+                        messages = []
+                        if system_prompt:
+                            messages.append({"role": "system", "content": system_prompt})
+                        messages.append({"role": "user", "content": prompt})
+                        text = tokenizer.apply_chat_template(
+                            messages, tokenize=False, add_generation_prompt=True
+                        )
+                    else:
+                        text = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+                    inputs = tokenizer(
+                        text, return_tensors="pt", truncation=True, max_length=2048
+                    )
+                    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+                    streamer_tok = tokenizer
+                    pad_id = tokenizer.eos_token_id
 
                 streamer = TextIteratorStreamer(
-                    tokenizer, skip_special_tokens=True, skip_prompt=True
+                    streamer_tok, skip_special_tokens=True, skip_prompt=True
                 )
                 gen_kwargs = {
                     **inputs,
@@ -223,7 +280,7 @@ class TransformersProvider(BaseProvider):
                     "do_sample": temperature > 0,
                     "temperature": temperature if temperature > 0 else 1.0,
                     "streamer": streamer,
-                    "pad_token_id": tokenizer.eos_token_id,
+                    "pad_token_id": pad_id,
                 }
 
                 gen_thread = Thread(target=model.generate, kwargs=gen_kwargs, daemon=True)

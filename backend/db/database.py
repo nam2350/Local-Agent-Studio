@@ -93,6 +93,41 @@ def init_db() -> None:
             ("Qwen/Qwen3.5-2B", "Qwen3.5 Synthesizer (2B)")
         )
 
+        # ── Phase 13: 대화 히스토리 테이블 ────────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS conversation_sessions (
+                id          TEXT PRIMARY KEY,
+                title       TEXT NOT NULL DEFAULT 'New Conversation',
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS conversation_turns (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id         TEXT NOT NULL REFERENCES conversation_sessions(id) ON DELETE CASCADE,
+                turn_index         INTEGER NOT NULL,
+                user_prompt        TEXT NOT NULL,
+                orchestration_mode TEXT NOT NULL DEFAULT 'dag',
+                created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_outputs (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                turn_id     INTEGER NOT NULL REFERENCES conversation_turns(id) ON DELETE CASCADE,
+                agent_id    TEXT NOT NULL,
+                role        TEXT NOT NULL DEFAULT '',
+                full_output TEXT NOT NULL DEFAULT '',
+                token_count INTEGER DEFAULT 0,
+                latency_ms  INTEGER DEFAULT 0,
+                vram_gb     REAL DEFAULT 0.0,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         count = conn.execute("SELECT COUNT(*) as c FROM agent_registry").fetchone()["c"]
         if count == 0:
             seed_agents = [

@@ -32,9 +32,13 @@ import {
   AlertTriangle,
   Pencil,
   Plus,
+  Trash2,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePipeline, type AgentMetrics, type ProviderType } from "@/context/PipelineContext";
+import React from "react";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -986,6 +990,196 @@ function MetricsPanel() {
   );
 }
 
+// ─── Conversation History Panel (Phase 13) ────────────────────────────────────
+
+type SessionSummary = { id: string; title: string; created_at: string; updated_at: string; turn_count: number };
+type TurnRecord = {
+  id: number; session_id: string; turn_index: number; user_prompt: string;
+  orchestration_mode: string; created_at: string;
+  agent_outputs: { id: number; agent_id: string; role: string; full_output: string; token_count: number; latency_ms: number }[];
+};
+
+function ConversationPanel() {
+  const { sessionId, setSessionId } = usePipeline();
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [expandedSession, setExpandedSession] = useState<string | null>(null);
+  const [turns, setTurns] = useState<TurnRecord[]>([]);
+  const [expandedTurn, setExpandedTurn] = useState<number | null>(null);
+
+  const fetchSessions = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${BACKEND}/api/conversations`);
+      if (res.ok) {
+        const data = await res.json();
+        setSessions(data.sessions ?? []);
+      }
+    } catch { /* backend offline */ }
+    finally { setLoading(false); }
+  }, []);
+
+  const fetchTurns = useCallback(async (sid: string) => {
+    try {
+      const res = await fetch(`${BACKEND}/api/conversations/${sid}`);
+      if (res.ok) {
+        const data = await res.json();
+        setTurns(data.turns ?? []);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  const deleteSession = useCallback(async (sid: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.confirm("이 대화를 삭제하시겠습니까?")) return;
+    try {
+      await fetch(`${BACKEND}/api/conversations/${sid}`, { method: "DELETE" });
+      if (sessionId === sid) setSessionId(null);
+      fetchSessions();
+      if (expandedSession === sid) { setExpandedSession(null); setTurns([]); }
+    } catch { /* ignore */ }
+  }, [sessionId, setSessionId, fetchSessions, expandedSession]);
+
+  useEffect(() => { fetchSessions(); }, [fetchSessions]);
+
+  useEffect(() => {
+    if (expandedSession) fetchTurns(expandedSession);
+  }, [expandedSession, fetchTurns]);
+
+  const continueSession = useCallback((sid: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSessionId(sid);
+  }, [setSessionId]);
+
+  return (
+    <div className="flex flex-col gap-2">
+      {/* 헤더 */}
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] text-cyber-muted font-medium">대화 기록</span>
+        <button
+          onClick={fetchSessions}
+          disabled={loading}
+          className="text-cyber-subtle hover:text-cyber-muted transition-colors disabled:opacity-40"
+        >
+          <RefreshCw size={9} className={loading ? "animate-spin" : ""} />
+        </button>
+      </div>
+
+      {/* 세션 목록 */}
+      {sessions.length === 0 ? (
+        <div
+          className="rounded-lg px-3 py-6 flex flex-col items-center gap-2"
+          style={{ background: "rgba(11,16,37,0.4)", border: "1px solid rgba(255,255,255,0.04)" }}
+        >
+          <MessageSquare size={18} className="text-cyber-subtle" />
+          <p className="text-[9px] text-cyber-subtle text-center">
+            대화 기록이 없습니다.<br />
+            TopBar의 <span className="text-cyber-cyan">New Session</span>을 눌러 시작하세요.
+          </p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1">
+          {sessions.map((s) => {
+            const isActive = sessionId === s.id;
+            const isExpanded = expandedSession === s.id;
+            return (
+              <div key={s.id}>
+                <div
+                  className="rounded-lg px-2.5 py-2 cursor-pointer transition-all"
+                  style={{
+                    background: isActive ? "rgba(34,211,238,0.08)" : "rgba(11,16,37,0.4)",
+                    border: `1px solid ${isActive ? "rgba(34,211,238,0.25)" : "rgba(255,255,255,0.06)"}`,
+                  }}
+                  onClick={() => {
+                    setExpandedSession(isExpanded ? null : s.id);
+                    if (!isExpanded) setExpandedTurn(null);
+                  }}
+                >
+                  <div className="flex items-center gap-1.5">
+                    {isExpanded
+                      ? <ChevronDown size={9} className="text-cyber-muted flex-shrink-0" />
+                      : <ChevronRight size={9} className="text-cyber-muted flex-shrink-0" />
+                    }
+                    <span className="text-[10px] text-cyber-text flex-1 truncate" title={s.title}>
+                      {s.title}
+                    </span>
+                    <span className="text-[9px] text-cyber-subtle flex-shrink-0">
+                      {s.turn_count}턴
+                    </span>
+                    <button
+                      onClick={(e) => continueSession(s.id, e)}
+                      className="text-[8px] px-1 rounded transition-colors flex-shrink-0"
+                      style={{ color: isActive ? "#22d3ee" : "#64748b", background: isActive ? "rgba(34,211,238,0.1)" : "transparent" }}
+                      title="이 세션으로 계속하기"
+                    >
+                      {isActive ? "활성" : "재개"}
+                    </button>
+                    <button
+                      onClick={(e) => deleteSession(s.id, e)}
+                      className="text-cyber-subtle hover:text-cyber-red transition-colors flex-shrink-0"
+                      title="삭제"
+                    >
+                      <Trash2 size={8} />
+                    </button>
+                  </div>
+                  <p className="text-[8px] text-cyber-subtle ml-4 mt-0.5 font-mono">
+                    {new Date(s.updated_at).toLocaleDateString("ko-KR")} · {s.id.slice(0, 8)}
+                  </p>
+                </div>
+
+                {/* 턴 목록 */}
+                {isExpanded && turns.length > 0 && (
+                  <div className="mt-1 ml-2 flex flex-col gap-1">
+                    {turns.map((t) => (
+                      <div key={t.id}>
+                        <div
+                          className="rounded px-2 py-1.5 cursor-pointer"
+                          style={{ background: "rgba(11,16,37,0.6)", border: "1px solid rgba(255,255,255,0.05)" }}
+                          onClick={() => setExpandedTurn(expandedTurn === t.id ? null : t.id)}
+                        >
+                          <div className="flex items-center gap-1">
+                            {expandedTurn === t.id
+                              ? <ChevronDown size={8} className="text-cyber-subtle flex-shrink-0" />
+                              : <ChevronRight size={8} className="text-cyber-subtle flex-shrink-0" />
+                            }
+                            <span className="text-[9px] text-cyber-muted flex-shrink-0">#{t.turn_index + 1}</span>
+                            <span className="text-[9px] text-cyber-text truncate flex-1">{t.user_prompt}</span>
+                          </div>
+                        </div>
+                        {expandedTurn === t.id && t.agent_outputs.length > 0 && (
+                          <div className="ml-2 mt-0.5 flex flex-col gap-0.5">
+                            {t.agent_outputs.map((o) => (
+                              <div
+                                key={o.id}
+                                className="rounded px-2 py-1.5"
+                                style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.04)" }}
+                              >
+                                <div className="flex items-center gap-1.5 mb-1">
+                                  <span className="text-[8px] font-bold text-cyber-muted uppercase">{o.role}</span>
+                                  <span className="text-[8px] text-cyber-subtle">{o.token_count} tok · {(o.latency_ms / 1000).toFixed(1)}s</span>
+                                </div>
+                                <p className="text-[8px] text-cyber-text leading-relaxed line-clamp-4 whitespace-pre-wrap">
+                                  {o.full_output.slice(0, 300)}
+                                  {o.full_output.length > 300 && "…"}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 // ─── Provider health panel ────────────────────────────────────────────────────
 
 function ProvidersPanel() {
@@ -1048,7 +1242,7 @@ function ProvidersPanel() {
 export default function RightPanel() {
   const { agentMetrics, totalTokens, totalMs, status, selectedNode, activeParallelStage } = usePipeline();
   const [uptime, setUptime] = useState(0);
-  const [activeTab, setActiveTab] = useState<"agents" | "output" | "metrics" | "providers" | "models">("agents");
+  const [activeTab, setActiveTab] = useState<"agents" | "output" | "metrics" | "providers" | "models" | "chat">("agents");
   const [registryAgents, setRegistryAgents] = useState<AgentRecord[]>([]);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentRecord | undefined>(undefined);
@@ -1197,6 +1391,7 @@ export default function RightPanel() {
           { key: "metrics",   label: "Metrics" },
           { key: "providers", label: "Prvdrs" },
           { key: "models",    label: "Models" },
+          { key: "chat",      label: "Chat" },
         ] as const).map(({ key, label }) => (
           <button
             key={key}
@@ -1327,6 +1522,18 @@ export default function RightPanel() {
               transition={{ duration: 0.15 }}
             >
               <MetricsPanel />
+            </motion.div>
+          )}
+
+          {activeTab === "chat" && (
+            <motion.div
+              key="chat"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+            >
+              <ConversationPanel />
             </motion.div>
           )}
 

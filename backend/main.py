@@ -355,6 +355,40 @@ def unload_all_endpoint():
     }
 
 
+# ─── Conversations (Phase 13) ─────────────────────────────────────────────────
+
+@app.get("/api/conversations")
+def list_conversations():
+    """저장된 대화 세션 목록 + 각 세션의 턴 수 반환."""
+    sessions = crud.list_sessions()
+    for s in sessions:
+        s["turn_count"] = crud.get_session_turn_count(s["id"])
+    return {"sessions": sessions}
+
+
+@app.get("/api/conversations/{session_id}")
+def get_conversation(session_id: str):
+    """특정 세션의 모든 턴 + 에이전트 출력 반환."""
+    session = crud.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    turns = crud.list_turns(session_id)
+    result = []
+    for turn in turns:
+        outputs = crud.list_agent_outputs(turn["id"])
+        result.append({**turn, "agent_outputs": outputs})
+    return {"session": session, "turns": result}
+
+
+@app.delete("/api/conversations/{session_id}")
+def delete_conversation(session_id: str):
+    """대화 세션 삭제 (CASCADE: turns + agent_outputs 포함)."""
+    if not crud.get_session(session_id):
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    crud.delete_session(session_id)
+    return {"ok": True}
+
+
 @app.post("/api/run")
 async def run(request: RunRequest, req: Request):
     """Stream pipeline execution as Server-Sent Events."""
