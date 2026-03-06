@@ -1,15 +1,19 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pipeline.models import RunRequest
 from pipeline.orchestrator import run_pipeline
-from providers.registry import registry
+from providers.registry import registry, ModelWatcher
 from db import crud, database
+from config import MODEL_REGISTRY, get_model_info
 from pydantic import BaseModel
 from typing import Any
 from pathlib import Path
 import asyncio
 import json
+import os
+import time
 
 # 로컬 모델 저장 경로 (HF 캐시 미사용)
 MODELS_DIR = Path(__file__).parent / "models"
@@ -17,12 +21,31 @@ MODELS_DIR = Path(__file__).parent / "models"
 # Ensure SQLite tables exist and default agents are seeded on startup
 database.init_db()
 
-app = FastAPI(title="Local Agent Studio API", version="0.2.0")
+
+# ─── Lifecycle (FastAPI lifespan — on_event deprecated 대체) ──────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """앱 시작/종료 시 리소스 관리."""
+    # startup
+    await ModelWatcher.get_instance().start()
+    yield
+    # shutdown
+    await ModelWatcher.get_instance().stop()
+    from providers.transformers_provider import _executor
+    _executor.shutdown(wait=False)
+
+
+app = FastAPI(title="Local Agent Studio API", version="0.2.0", lifespan=lifespan)
 
 # ─── CORS ─────────────────────────────────────────────────────────────────────
+_default_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+_extra = os.environ.get("CORS_ORIGINS", "")
+_cors_origins = _default_origins + [o.strip() for o in _extra.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -171,6 +194,81 @@ def delete_pipeline(pipeline_id: int):
     return {"ok": True}
 
 
+# ─── Model Info ───────────────────────────────────────────────────────────────
+
+@app.get("/api/models/info")
+def get_model_info_all():
+    """등록된 모든 모델의 개발사 정보 + 권장 파라미터 반환."""
+    return {"models": MODEL_REGISTRY}
+
+
+@app.get("/api/models/info/{model_id:path}")
+def get_model_info_one(model_id: str):
+    """특정 모델의 개발사 정보 + 권장 파라미터 반환."""
+    info = get_model_info(model_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Model '{model_id}' not in registry")
+    return info
+
+
+# ─── Dynamic Model Discovery (Phase 19) ──────────────────────────────────────
+
+@app.get("/api/models/watch")
+async def watch_models(req: Request):
+    """
+    SSE 스트림: Ollama/LMStudio 모델 목록 변경을 실시간으로 전송.
+    - 연결 직후: 현재 전체 목록을 model_snapshot 이벤트로 전송
+    - 이후: model_added / model_removed 이벤트 (변경 시에만)
+    - 30초마다 ping 이벤트 (연결 유지)
+    """
+    watcher = ModelWatcher.get_instance()
+    q = watcher.subscribe()
+
+    def sse(data: dict) -> str:
+        return f"data: {json.dumps(data)}\n\n"
+
+    async def generate():
+        # 1) 연결 직후 현재 스냅샷 전송
+        snapshot = watcher.get_current_models()
+        for provider, models in snapshot.items():
+            yield sse({"type": "model_snapshot", "provider": provider, "models": models})
+
+        last_ping = time.time()
+        try:
+            while True:
+                if await req.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=1.0)
+                    yield sse(event)
+                except asyncio.TimeoutError:
+                    now = time.time()
+                    if now - last_ping >= 30.0:
+                        yield sse({"type": "ping", "timestamp": now})
+                        last_ping = now
+        finally:
+            watcher.unsubscribe(q)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
+@app.post("/api/models/refresh")
+async def refresh_models():
+    """수동 새로고침: ModelWatcher를 즉시 1회 폴링하고 현재 목록 반환."""
+    watcher = ModelWatcher.get_instance()
+    await watcher._poll_once()
+    return {"models": watcher.get_current_models(), "ok": True}
+
+
 # ─── Model Download ───────────────────────────────────────────────────────────
 
 class DownloadRequest(BaseModel):
@@ -234,7 +332,7 @@ async def download_model(body: DownloadRequest, req: Request):
         local_dir = MODELS_DIR / model_id.replace("/", "--")
         local_dir.mkdir(parents=True, exist_ok=True)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         # ── 1. 파일 목록 조회 ────────────────────────────────────────────────
         yield sse({"type": "download_listing", "modelId": model_id})

@@ -1,14 +1,13 @@
 """SQLite database setup for pipeline persistence and model registry."""
 
 import sqlite3
-from pathlib import Path
-
-DB_PATH = Path(__file__).parent.parent / "studio.db"
+from config import DB_PATH
 
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")  # CASCADE 삭제 실제 동작 보장
     return conn
 
 
@@ -49,7 +48,7 @@ def init_db() -> None:
              "google/gemma-2-2b-it", "google/gemma-3-4b-it")
         )
 
-        # Phase 12A: router-1 system_prompt를 JSON 출력 요구사항 포함 버전으로 마이그레이션
+        # Phase 12A: router-1 system_prompt 마이그레이션 (구버전인 경우에만 업데이트)
         # Phase Qwen3.5: Thinking Mode 비활성화 지시 추가
         _NEW_ROUTER_PROMPT = (
             "You are a task routing system. Analyze the user request and decide "
@@ -70,28 +69,24 @@ def init_db() -> None:
             "Legacy fallback line (include this too for compatibility):\n"
             "[TARGET_AGENTS] coder-1, analyzer-1"
         )
+        # router-1 시스템 프롬프트: JSON 출력 지시 없는 구버전만 업데이트
         conn.execute(
-            "UPDATE agent_registry SET system_prompt=? WHERE id='router-1'",
+            "UPDATE agent_registry SET system_prompt=? WHERE id='router-1' AND system_prompt NOT LIKE '%target_agents%'",
             (_NEW_ROUTER_PROMPT,)
         )
 
-        # Phase Qwen3.5: 모델 교체 마이그레이션 (router, analyzer, vision, synthesizer)
-        conn.execute(
-            "UPDATE agent_registry SET model_id=?, name=? WHERE id='router-1'",
-            ("Qwen/Qwen3.5-4B", "Qwen3.5 Router (4B)")
-        )
-        conn.execute(
-            "UPDATE agent_registry SET model_id=?, name=? WHERE id='analyzer-1'",
-            ("Qwen/Qwen3.5-4B", "Qwen3.5 Analyzer (4B)")
-        )
-        conn.execute(
-            "UPDATE agent_registry SET model_id=?, name=? WHERE id='vision-1'",
-            ("Qwen/Qwen3.5-0.8B", "Qwen3.5 Vision (0.8B)")
-        )
-        conn.execute(
-            "UPDATE agent_registry SET model_id=?, name=? WHERE id='synthesizer-1'",
-            ("Qwen/Qwen3.5-2B", "Qwen3.5 Synthesizer (2B)")
-        )
+        # Phase Qwen3.5: 구버전 모델 ID를 가진 경우에만 교체
+        _qwen35_migrations = [
+            ("router-1",      "Qwen/Qwen3.5-4B",   "Qwen3.5 Router (4B)"),
+            ("analyzer-1",    "Qwen/Qwen3.5-4B",   "Qwen3.5 Analyzer (4B)"),
+            ("vision-1",      "Qwen/Qwen3.5-0.8B", "Qwen3.5 Vision (0.8B)"),
+            ("synthesizer-1", "Qwen/Qwen3.5-2B",   "Qwen3.5 Synthesizer (2B)"),
+        ]
+        for agent_id, new_model, new_name in _qwen35_migrations:
+            conn.execute(
+                "UPDATE agent_registry SET model_id=?, name=? WHERE id=? AND model_id != ?",
+                (new_model, new_name, agent_id, new_model),
+            )
 
         # ── Phase 13: 대화 히스토리 테이블 ────────────────────────────────────────
         conn.execute("""

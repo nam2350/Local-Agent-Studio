@@ -20,7 +20,7 @@ export type NodeConfig = {
 export const AGENT_TYPE_DEFAULTS: Record<AgentType, NodeConfig> = {
   router: {
     provider: "simulation",
-    modelId: "Qwen2.5-3B-Instruct",
+    modelId: "Qwen/Qwen3.5-4B",
     systemPrompt:
       "You are a task routing system. Analyze the user request briefly. " +
       "Classify the task type, estimate complexity, and state which specialist " +
@@ -30,7 +30,7 @@ export const AGENT_TYPE_DEFAULTS: Record<AgentType, NodeConfig> = {
   },
   coder: {
     provider: "simulation",
-    modelId: "Qwen2.5-Coder-7B",
+    modelId: "LocoreMind/LocoOperator-4B",
     systemPrompt:
       "You are an expert programmer. Generate clean, working code for the task. " +
       "Include type hints and brief comments. Keep the implementation concise.",
@@ -39,7 +39,7 @@ export const AGENT_TYPE_DEFAULTS: Record<AgentType, NodeConfig> = {
   },
   analyzer: {
     provider: "simulation",
-    modelId: "Gemma-3-4B-IT",
+    modelId: "Qwen/Qwen3.5-4B",
     systemPrompt:
       "You are a technical analyst. Review the task and any code provided. " +
       "Identify security issues, performance concerns, and give brief recommendations.",
@@ -48,7 +48,7 @@ export const AGENT_TYPE_DEFAULTS: Record<AgentType, NodeConfig> = {
   },
   validator: {
     provider: "simulation",
-    modelId: "Phi-4-mini-4B",
+    modelId: "microsoft/Phi-4-mini-instruct",
     systemPrompt:
       "You are a code quality expert. Score the provided code out of 100 for " +
       "quality and security. List top 3 issues. Give a final verdict: APPROVED or NEEDS_REVISION.",
@@ -57,7 +57,7 @@ export const AGENT_TYPE_DEFAULTS: Record<AgentType, NodeConfig> = {
   },
   synthesizer: {
     provider: "simulation",
-    modelId: "Llama-3.1-8B-Instruct",
+    modelId: "Qwen/Qwen3.5-2B",
     systemPrompt:
       "You are a technical writer. Synthesize the outputs from all agents into " +
       "a clear final summary. Include: implementation overview, quality score, " +

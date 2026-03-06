@@ -25,15 +25,17 @@ def _get_agent(agent_id: str) -> dict:
         return {
             "id": agent_id,
             "label": agent_id.capitalize(),
-            "model": "Qwen2.5-3B-Instruct",
-            "hf_model": "Qwen/Qwen2.5-3B-Instruct",
+            "model": "Qwen/Qwen3.5-4B",
+            "hf_model": "Qwen/Qwen3.5-4B",
             "system_prompt": "You are a helpful assistant.",
             "role": "assistant",
+            "max_tokens": 512,
+            "temperature": 0.7,
             "tokensPerSec": 35.0,
             "vramGb": 3.0,
             "warmupSec": 0.5,
         }
-    
+
     return {
         "id": agent_record["id"],
         "label": agent_record["name"],
@@ -41,6 +43,8 @@ def _get_agent(agent_id: str) -> dict:
         "hf_model": agent_record["model_id"],
         "system_prompt": agent_record["system_prompt"],
         "role": agent_record.get("role", "assistant"),
+        "max_tokens": agent_record.get("max_tokens", 512),
+        "temperature": agent_record.get("temperature", 0.7),
         "tokensPerSec": 35.0,
         "vramGb": 3.0,
         "warmupSec": 0.5,
@@ -311,7 +315,8 @@ def _resolve_max_tokens(agent: dict, request: RunRequest) -> int:
         cfg = next((c for c in request.agent_configs if c.agent_id == agent["id"]), None)
         if cfg:
             return cfg.max_tokens
-    return 512
+    # agent_configs 없음 → DB에 저장된 에이전트별 max_tokens 사용
+    return agent.get("max_tokens", 512)
 
 
 def _resolve_temperature(agent: dict, request: RunRequest) -> float:
@@ -319,7 +324,8 @@ def _resolve_temperature(agent: dict, request: RunRequest) -> float:
         cfg = next((c for c in request.agent_configs if c.agent_id == agent["id"]), None)
         if cfg:
             return cfg.temperature
-    return 0.7
+    # agent_configs 없음 → DB에 저장된 에이전트별 temperature 사용
+    return agent.get("temperature", 0.7)
 
 
 # ─── Agent input builder ──────────────────────────────────────────────────────
@@ -401,6 +407,15 @@ async def _run_single_agent(
                     max_tokens=_resolve_max_tokens(agent, request),
                     temperature=_resolve_temperature(agent, request),
                 ):
+                    if token_text.startswith("__SSE__:"):
+                        try:
+                            sse_data = json.loads(token_text[8:])
+                            sse_data["agentId"] = agent_id
+                            yield sse(sse_data)
+                        except Exception:
+                            pass
+                        continue
+
                     full_output += token_text
                     agent_tokens += max(1, len(token_text.split()))
                     elapsed = time.time() - agent_start_t
@@ -428,7 +443,7 @@ async def _run_single_agent(
         r'\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[^}]*\})\s*\}',
         re.DOTALL
     )
-    tool_match = tool_json_pattern.search(full_output)
+    tool_matches = list(tool_json_pattern.finditer(full_output))
 
     # Resolve which tools are enabled for this agent
     active_tools: list[str] = []
@@ -437,11 +452,17 @@ async def _run_single_agent(
         if cfg and cfg.tools:
             active_tools = cfg.tools
 
-    if tool_match and (provider or active_tools):
-        tool_name = tool_match.group(1)
-        args_str   = tool_match.group(2)
+    if tool_matches and (provider or active_tools):
+        allowed_tools = active_tools or ["web_search", "calculator", "read_file"]
+        tool_results_context = ""
 
-        if tool_name in (active_tools or ["web_search", "calculator", "read_file"]):
+        for tool_match in tool_matches:
+            tool_name = tool_match.group(1)
+            args_str  = tool_match.group(2)
+
+            if tool_name not in allowed_tools:
+                continue
+
             try:
                 tool_args = json.loads(args_str)
             except json.JSONDecodeError:
@@ -477,29 +498,33 @@ async def _run_single_agent(
                 "tokensPerSec": 0,
             })
 
-            # ── Second pass: re-prompt with tool result ──
-            if provider:
-                tool_prompt = (
-                    f"{agent_input}\n\n"
-                    f"[TOOL RESULT for {tool_name}({args_str})]:\n{tool_result}\n\n"
-                    "Now provide your final answer based on the tool result above."
-                )
-                added_output = ""
-                try:
-                    async for token_text in provider.generate(
-                        prompt=tool_prompt,
-                        system_prompt=agent.get("system_prompt", ""),
-                        max_tokens=_resolve_max_tokens(agent, request),
-                        temperature=_resolve_temperature(agent, request),
-                    ):
-                        added_output += token_text
-                        agent_tokens += max(1, len(token_text.split()))
-                        elapsed = time.time() - agent_start_t
-                        tps = round(agent_tokens / elapsed, 1) if elapsed > 0 else 0
-                        yield sse({"type": "agent_token", "agentId": agent_id, "token": token_text, "totalTokens": agent_tokens, "tokensPerSec": tps})
-                    full_output += "\n\n[Tool Result Applied]\n" + added_output
-                except Exception as e:
-                    logger.warning(f"[{agent_id}] Re-prompting after tool call failed: {e}")
+            tool_results_context += (
+                f"\n[TOOL RESULT for {tool_name}({args_str})]:\n{tool_result}\n"
+            )
+
+        # ── Second pass: re-prompt with all tool results ──
+        if tool_results_context and provider:
+            tool_prompt = (
+                f"{agent_input}\n\n"
+                f"{tool_results_context}\n"
+                "Now provide your final answer based on the tool results above."
+            )
+            added_output = ""
+            try:
+                async for token_text in provider.generate(
+                    prompt=tool_prompt,
+                    system_prompt=agent.get("system_prompt", ""),
+                    max_tokens=_resolve_max_tokens(agent, request),
+                    temperature=_resolve_temperature(agent, request),
+                ):
+                    added_output += token_text
+                    agent_tokens += max(1, len(token_text.split()))
+                    elapsed = time.time() - agent_start_t
+                    tps = round(agent_tokens / elapsed, 1) if elapsed > 0 else 0
+                    yield sse({"type": "agent_token", "agentId": agent_id, "token": token_text, "totalTokens": agent_tokens, "tokensPerSec": tps})
+                full_output += "\n\n[Tool Results Applied]\n" + added_output
+            except Exception as e:
+                logger.warning(f"[{agent_id}] Re-prompting after tool calls failed: {e}")
 
     # Store output BEFORE yielding agent_done
     previous_outputs[agent_id] = full_output
@@ -623,10 +648,9 @@ async def run_pipeline(
         except Exception as e:
             logger.warning("[orchestrator] conversation history load failed: %s", e)
 
-    # Count total agents roughly (will adjust later)
     yield sse({
         "type": "pipeline_start",
-        "totalAgents": 4, # Estimated default
+        "totalAgents": sum(len(s) for s in FALLBACK_STAGES),  # 5: router+coder+analyzer+validator+synthesizer
         "prompt": prompt[:120],
     })
 

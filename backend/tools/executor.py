@@ -1,11 +1,7 @@
 """Tool execution engine."""
 
-import json
 import math
 import re
-import urllib.request
-import urllib.parse
-import urllib.error
 import logging
 from pathlib import Path
 
@@ -17,8 +13,6 @@ WORKSPACE_ROOT = Path(__file__).parent.parent.parent  # project root
 def execute_tool(name: str, arguments: dict) -> str:
     """Execute a named tool with given arguments. Returns result string."""
     try:
-        if name == "web_search":
-            return _web_search(arguments.get("query", ""))
         if name == "calculator":
             return _calculator(arguments.get("expression", ""))
         if name == "read_file":
@@ -30,40 +24,6 @@ def execute_tool(name: str, arguments: dict) -> str:
 
 
 # ─── Tool implementations ─────────────────────────────────────────────────────
-
-def _web_search(query: str) -> str:
-    """Query DuckDuckGo Instant Answer API (no key required)."""
-    if not query.strip():
-        return "[Empty query]"
-    try:
-        encoded = urllib.parse.quote_plus(query)
-        url = f"https://api.duckduckgo.com/?q={encoded}&format=json&no_redirect=1&no_html=1"
-        req = urllib.request.Request(url, headers={"User-Agent": "LocalAgentStudio/1.0"})
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-
-        parts: list[str] = []
-
-        # Abstract (main answer)
-        if data.get("AbstractText"):
-            parts.append(data["AbstractText"])
-
-        # Related topics (up to 3)
-        topics = data.get("RelatedTopics", [])[:3]
-        for t in topics:
-            if isinstance(t, dict) and t.get("Text"):
-                parts.append(f"• {t['Text']}")
-
-        # Answer (e.g. calculator, conversions)
-        if data.get("Answer"):
-            parts.append(f"Answer: {data['Answer']}")
-
-        if parts:
-            return "\n".join(parts)[:800]
-        return f"No instant answer found for: {query}"
-    except urllib.error.URLError as e:
-        return f"[Search unavailable: {e}]"
-
 
 def _calculator(expression: str) -> str:
     """Safely evaluate a mathematical expression."""
@@ -108,30 +68,3 @@ def _read_file(path: str) -> str:
     except Exception as e:
         return f"[Read error: {e}]"
 
-
-# ─── Tool call detection ──────────────────────────────────────────────────────
-
-TOOL_CALL_PATTERN = re.compile(
-    r'\[TOOL:\s*(\w+)\]\s*(\{.*?\})\s*\[/TOOL\]',
-    re.DOTALL | re.IGNORECASE
-)
-
-
-def detect_and_execute_tools(text: str, enabled_tools: list[str]) -> list[dict]:
-    """
-    Scan text for [TOOL: name] {...} [/TOOL] patterns.
-    Execute matched tools and return list of {tool, input, output} dicts.
-    """
-    results = []
-    for m in TOOL_CALL_PATTERN.finditer(text):
-        tool_name = m.group(1).strip()
-        args_str  = m.group(2).strip()
-        if tool_name not in enabled_tools:
-            continue
-        try:
-            args = json.loads(args_str)
-        except json.JSONDecodeError:
-            args = {"raw": args_str}
-        output = execute_tool(tool_name, args)
-        results.append({"tool": tool_name, "input": args, "output": output})
-    return results

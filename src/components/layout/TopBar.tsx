@@ -10,7 +10,6 @@ import {
   ChevronDown,
   FolderOpen,
   Save,
-  Terminal,
   CheckCircle2,
   AlertCircle,
   Send,
@@ -477,13 +476,6 @@ export default function TopBar() {
 
       {/* Right actions */}
       <div className="flex items-center gap-1 flex-shrink-0">
-        <button
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-cyber-muted hover:text-cyber-text transition-colors duration-150"
-          style={{ border: "1px solid rgba(255,255,255,0.06)" }}
-          title="Terminal (coming soon)"
-        >
-          <Terminal size={12} />
-        </button>
         <button
           onClick={() => setShowSaveModal(true)}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-cyber-muted hover:text-cyber-cyan hover:border-cyber-cyan/30 transition-all duration-150"

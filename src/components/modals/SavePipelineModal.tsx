@@ -5,8 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Save, X, Loader2, CheckCircle2 } from "lucide-react";
 import { useCanvasBridge } from "@/context/CanvasBridgeContext";
 import { usePipeline } from "@/context/PipelineContext";
-
-const BACKEND = "http://localhost:8000";
+import { BACKEND } from "@/lib/config";
 
 interface SavePipelineModalProps {
   open: boolean;

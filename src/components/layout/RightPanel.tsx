@@ -38,17 +38,11 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePipeline, type AgentMetrics, type ProviderType } from "@/context/PipelineContext";
+import { BACKEND } from "@/lib/config";
 import React from "react";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const AGENT_CONFIG = [
-  { id: "router-1",      label: "Router",      icon: GitBranch,   color: "#22d3ee", vramMax: 2.5 },
-  { id: "coder-1",       label: "Code Writer", icon: Code2,       color: "#a855f7", vramMax: 5.2 },
-  { id: "analyzer-1",    label: "Analyzer",    icon: FlaskConical,color: "#f472b6", vramMax: 3.1 },
-  { id: "validator-1",   label: "Validator",   icon: ShieldCheck, color: "#f59e0b", vramMax: 3.4 },
-  { id: "synthesizer-1", label: "Synthesizer", icon: Layers,      color: "#10b981", vramMax: 6.0 },
-];
 
 type RoleMeta = { icon: React.ComponentType<{ size?: number; color?: string }>; color: string; vramMax: number };
 
@@ -99,109 +93,6 @@ function StatusIcon({ status }: { status: AgentMetrics["status"] }) {
   if (status === "running") return <Loader2 size={10} className="animate-spin text-cyber-cyan" />;
   if (status === "done")    return <CheckCircle2 size={10} className="text-cyber-green" />;
   return <Circle size={10} className="text-cyber-subtle" />;
-}
-
-function AgentRow({
-  config,
-  metrics,
-}: {
-  config: (typeof AGENT_CONFIG)[number];
-  metrics: AgentMetrics;
-}) {
-  const Icon = config.icon;
-  const isRunning = metrics.status === "running";
-  const providerColor = PROVIDER_COLORS[metrics.provider] ?? "#64748b";
-  const providerLabel = PROVIDER_LABELS[metrics.provider] ?? "SIM";
-
-  return (
-    <motion.div
-      layout
-      className="rounded-lg p-2.5"
-      style={{
-        background: `${config.color}06`,
-        border: `1px solid ${config.color}${isRunning ? "35" : "15"}`,
-        transition: "border-color 0.3s",
-      }}
-    >
-      {/* Header */}
-      <div className="flex items-center gap-2 mb-2">
-        <div
-          className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
-          style={{ background: `${config.color}15` }}
-        >
-          <Icon size={12} color={config.color} />
-        </div>
-        <span className="text-xs font-medium text-cyber-text flex-1">{config.label}</span>
-        <div className="flex items-center gap-1.5">
-          {metrics.provider !== "simulation" && (
-            <span
-              className="text-[8px] font-bold px-1 rounded"
-              style={{ color: providerColor, background: `${providerColor}20` }}
-            >
-              {providerLabel}
-            </span>
-          )}
-          <StatusIcon status={metrics.status} />
-          <span
-            className="text-[10px] font-mono"
-            style={{
-              color:
-                metrics.status === "running" ? config.color :
-                metrics.status === "done"    ? "#10b981" :
-                "#64748b",
-            }}
-          >
-            {metrics.status}
-          </span>
-        </div>
-      </div>
-
-      {/* Metrics grid */}
-      <div className="grid grid-cols-3 gap-1.5 mb-2">
-        <div>
-          <p className="text-[9px] text-cyber-subtle uppercase tracking-wider mb-0.5">T/s</p>
-          <p className="text-[11px] font-mono font-semibold" style={{ color: isRunning ? config.color : "#64748b" }}>
-            {metrics.tokensPerSec > 0 ? metrics.tokensPerSec.toFixed(1) : "—"}
-          </p>
-        </div>
-        <div>
-          <p className="text-[9px] text-cyber-subtle uppercase tracking-wider mb-0.5">Latency</p>
-          <p className="text-[11px] font-mono font-semibold text-cyber-muted">
-            {metrics.latencyMs > 0 ? `${(metrics.latencyMs / 1000).toFixed(1)}s` : "—"}
-          </p>
-        </div>
-        <div>
-          <p className="text-[9px] text-cyber-subtle uppercase tracking-wider mb-0.5">Tokens</p>
-          <p className="text-[11px] font-mono font-semibold text-cyber-text">
-            {metrics.tokens > 0 ? metrics.tokens.toLocaleString() : "—"}
-          </p>
-        </div>
-      </div>
-
-      {/* VRAM */}
-      <div>
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-[9px] text-cyber-subtle uppercase tracking-wider">VRAM</span>
-          <span className="text-[9px] font-mono" style={{ color: config.color }}>
-            {metrics.vramGb.toFixed(1)} / {config.vramMax} GB
-          </span>
-        </div>
-        <VramBar used={metrics.vramGb} max={config.vramMax} color={config.color} />
-      </div>
-
-      {/* Running progress bar */}
-      {isRunning && (
-        <motion.div className="mt-2 h-0.5 rounded-full overflow-hidden bg-white/[0.04]">
-          <motion.div
-            className="h-full rounded-full"
-            style={{ background: `linear-gradient(90deg, transparent, ${config.color})` }}
-            animate={{ x: ["-100%", "100%"] }}
-            transition={{ duration: 1.2, repeat: Infinity, ease: "linear" }}
-          />
-        </motion.div>
-      )}
-    </motion.div>
-  );
 }
 
 // ─── DB 기반 에이전트 행 ──────────────────────────────────────────────────────
@@ -355,7 +246,7 @@ function ToolCallBadge({ tool, input, output }: { tool: string; input: Record<st
 // ─── Output viewer ────────────────────────────────────────────────────────────
 
 function OutputPanel() {
-  const { agentMetrics } = usePipeline();
+  const { agentMetrics, registryAgents } = usePipeline();
   const [activeAgent, setActiveAgent] = useState("router-1");
   const currentMetrics = agentMetrics[activeAgent];
   const currentOutput = currentMetrics?.output ?? "";
@@ -364,29 +255,31 @@ function OutputPanel() {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex gap-1 flex-wrap">
-        {AGENT_CONFIG.map((c) => {
-          const m = agentMetrics[c.id];
+        {registryAgents.map((agent) => {
+          const color = ROLE_META[agent.role]?.color ?? DEFAULT_ROLE_META.color;
+          const m = agentMetrics[agent.id];
           const hasOutput = m && m.output.length > 0;
           const hasTools = m && m.toolCalls && m.toolCalls.length > 0;
+          const label = agent.role.charAt(0).toUpperCase() + agent.role.slice(1);
           return (
             <button
-              key={c.id}
-              onClick={() => setActiveAgent(c.id)}
+              key={agent.id}
+              onClick={() => setActiveAgent(agent.id)}
               className={cn(
                 "px-2 py-0.5 rounded text-[10px] font-medium transition-all",
-                activeAgent === c.id ? "text-white" : "text-cyber-muted hover:text-cyber-text"
+                activeAgent === agent.id ? "text-white" : "text-cyber-muted hover:text-cyber-text"
               )}
               style={
-                activeAgent === c.id
-                  ? { background: `${c.color}20`, border: `1px solid ${c.color}40`, color: c.color }
+                activeAgent === agent.id
+                  ? { background: `${color}20`, border: `1px solid ${color}40`, color }
                   : { background: "transparent", border: "1px solid transparent" }
               }
             >
-              {c.label}
+              {label}
               {hasOutput && (
                 <span
                   className="ml-1 w-1 h-1 rounded-full inline-block align-middle"
-                  style={{ background: c.color }}
+                  style={{ background: color }}
                 />
               )}
               {hasTools && (
@@ -439,8 +332,6 @@ type DownloadState =
   | { stage: "error"; message: string };
 
 type LocalModel = { model_id: string; size_str: string; nb_files: number };
-
-const BACKEND = "http://localhost:8000";
 
 type VramInfo = { allocated_gb: number; total_gb: number; free_gb: number; reserved_gb: number };
 
@@ -768,14 +659,126 @@ function ModelDownloadPanel() {
 
 // ─── Metrics Dashboard panel ──────────────────────────────────────────────────
 
+// ─── Remote Models Section (Phase 19) ─────────────────────────────────────────
+
+function RemoteModelsSection() {
+  const { modelMetadata, newModelKeys, refreshModels } = usePipeline();
+  const [refreshing, setRefreshing] = useState(false);
+
+  const providers = Object.entries(modelMetadata).filter(([, metas]) => metas.length > 0);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await refreshModels();
+    setTimeout(() => setRefreshing(false), 800);
+  };
+
+  if (providers.length === 0) return null;
+
+  return (
+    <div className="mt-3">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-cyber-muted">
+          Live Models
+        </span>
+        <button
+          onClick={handleRefresh}
+          className="p-1 rounded hover:bg-white/10 transition-colors"
+          title="Refresh model list"
+        >
+          <RefreshCw size={9} color="#64748b" className={refreshing ? "animate-spin" : ""} />
+        </button>
+      </div>
+
+      {providers.map(([provider, metas]) => (
+        <div key={provider} className="mb-2">
+          <div className="flex items-center gap-1.5 mb-1">
+            <span
+              className="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded"
+              style={{
+                color: provider === "ollama" ? "#22d3ee" : "#a855f7",
+                background: provider === "ollama" ? "rgba(34,211,238,0.1)" : "rgba(168,85,247,0.1)",
+              }}
+            >
+              {provider}
+            </span>
+            <span className="text-[9px] text-cyber-subtle">
+              {metas.length} model{metas.length !== 1 ? "s" : ""}
+            </span>
+          </div>
+
+          <div className="space-y-0.5">
+            {metas.map((meta) => {
+              const key = `${provider}:${meta.model_id}`;
+              const isNew = newModelKeys.has(key);
+              return (
+                <motion.div
+                  key={meta.model_id}
+                  initial={isNew ? { opacity: 0, x: -6 } : false}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.25 }}
+                  className="flex items-center gap-1.5 px-2 py-1.5 rounded"
+                  style={{
+                    background: isNew ? "rgba(34,211,238,0.06)" : "rgba(11,16,37,0.5)",
+                    border: `1px solid ${isNew ? "rgba(34,211,238,0.25)" : "rgba(255,255,255,0.04)"}`,
+                  }}
+                >
+                  <AnimatePresence>
+                    {isNew && (
+                      <motion.span
+                        initial={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.75 }}
+                        className="text-[7px] font-bold px-1 py-0.5 rounded flex-shrink-0"
+                        style={{ color: "#22d3ee", background: "rgba(34,211,238,0.15)" }}
+                      >
+                        NEW
+                      </motion.span>
+                    )}
+                  </AnimatePresence>
+
+                  <span className="text-[10px] text-cyber-text font-mono flex-1 truncate min-w-0">
+                    {meta.model_id}
+                  </span>
+
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {meta.parameter_size && (
+                      <span className="text-[8px] text-cyber-subtle">{meta.parameter_size}</span>
+                    )}
+                    {meta.quantization && (
+                      <span
+                        className="text-[7px] font-mono px-1 rounded"
+                        style={{ color: "#f59e0b", background: "rgba(245,158,11,0.1)" }}
+                      >
+                        {meta.quantization}
+                      </span>
+                    )}
+                    {meta.size_bytes > 0 && (
+                      <span className="text-[8px] text-cyber-subtle">
+                        {(meta.size_bytes / 1e9).toFixed(1)}GB
+                      </span>
+                    )}
+                  </div>
+                </motion.div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MetricsPanel() {
-  const { agentMetrics, status, totalMs } = usePipeline();
+  const { agentMetrics, status, totalMs, registryAgents } = usePipeline();
 
   // Build sorted data for agents that have run
-  const agentData = AGENT_CONFIG.map((cfg) => {
-    const m = agentMetrics[cfg.id];
+  const agentData = registryAgents.map((agent) => {
+    const meta = ROLE_META[agent.role] ?? DEFAULT_ROLE_META;
+    const m = agentMetrics[agent.id];
     return {
-      ...cfg,
+      id: agent.id,
+      label: agent.role.charAt(0).toUpperCase() + agent.role.slice(1),
+      color: meta.color,
       latencyMs:    m?.latencyMs    ?? 0,
       tokensPerSec: m?.tokensPerSec ?? 0,
       tokens:       m?.tokens       ?? 0,
@@ -1329,7 +1332,7 @@ export default function RightPanel() {
           { label: "Tokens",      value: totalTokens > 0 ? totalTokens.toLocaleString() : "—", icon: MessageSquare, color: "#22d3ee" },
           { label: "Avg Latency", value: avgLatency > 0 ? `${(avgLatency / 1000).toFixed(1)}s` : "—", icon: Clock, color: "#a855f7" },
           { label: "VRAM",        value: totalVram > 0 ? `${totalVram.toFixed(1)} GB` : "—", icon: MemoryStick, color: "#f472b6" },
-          { label: "Active",      value: `${activeAgentCount} / ${registryAgents.length || AGENT_CONFIG.length}`, icon: Activity, color: "#10b981" },
+          { label: "Active",      value: `${activeAgentCount} / ${registryAgents.length}`, icon: Activity, color: "#10b981" },
         ].map(({ label, value, icon: Icon, color }) => (
           <div
             key={label}
@@ -1510,6 +1513,7 @@ export default function RightPanel() {
               transition={{ duration: 0.15 }}
             >
               <ModelDownloadPanel />
+              <RemoteModelsSection />
             </motion.div>
           )}
 
@@ -1568,7 +1572,7 @@ export default function RightPanel() {
                       label: "Throughput",
                       value: totalMs > 0 ? `${(totalTokens / (totalMs / 1000)).toFixed(1)} T/s` : "—",
                     },
-                    { label: "Agents Run",   value: `${doneCount} / ${registryAgents.length || AGENT_CONFIG.length}` },
+                    { label: "Agents Run",   value: `${doneCount} / ${registryAgents.length}` },
                   ].map(({ label, value }) => (
                     <div
                       key={label}
@@ -1627,7 +1631,7 @@ export default function RightPanel() {
             style={{ background: status === "idle" ? "#334155" : "#22d3ee" }}
           />
           <span className="text-[10px] text-cyber-muted">
-            {status === "idle" ? "Ready" : "localhost:8000 · online"}
+            {status === "idle" ? "Ready" : `${new URL(BACKEND).host} · online`}
           </span>
         </div>
       </div>

@@ -18,19 +18,8 @@ import {
   Circle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { ProviderType } from "@/context/PipelineContext";
-
-export type AgentType =
-  | "router"
-  | "coder"
-  | "analyzer"
-  | "synthesizer"
-  | "validator"
-  | "input"
-  | "output"
-  | "custom";
-
-export type AgentStatus = "idle" | "running" | "done" | "error";
+import type { ProviderType, AgentStatus } from "@/context/PipelineContext";
+import type { AgentType } from "@/constants/agentDefaults";
 
 export type AgentNodeData = {
   label: string;

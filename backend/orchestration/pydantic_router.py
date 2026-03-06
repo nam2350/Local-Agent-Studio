@@ -45,10 +45,20 @@ _LEGACY_KEYWORD_MAP: dict[str, str] = {
     "vision": "vision-1",
 }
 
-# JSON Stage에서 허용하는 라우팅 가능 에이전트
-_ROUTABLE_AGENTS: frozenset[str] = frozenset({
-    "coder-1", "analyzer-1", "validator-1", "vision-1",
-})
+
+def _get_routable_agents() -> frozenset[str]:
+    """DB에서 router 이외의 에이전트 ID를 동적으로 로드.
+    DB 조회 실패 시 하드코딩 기본값으로 fallback.
+    """
+    try:
+        from db.crud import list_agents
+        agents = list_agents()
+        ids = frozenset(a["id"] for a in agents if a.get("role") != "router")
+        if ids:
+            return ids
+    except Exception:
+        pass
+    return frozenset({"coder-1", "analyzer-1", "validator-1", "vision-1"})
 
 
 def parse_router_output(output: str) -> Optional[RouterDecision]:
@@ -92,7 +102,7 @@ def extract_target_agents(
         list[str] — 결정된 에이전트 목록 (빈 리스트 = 명시적 none).
         None       — 파싱 실패, 호출자가 ["coder-1", "analyzer-1"] fallback 처리.
     """
-    _known = known_agents if known_agents is not None else _ROUTABLE_AGENTS
+    _known = known_agents if known_agents is not None else _get_routable_agents()
 
     # ── Stage 1: JSON 파싱 ────────────────────────────────────────────────────
     if structured_routing:

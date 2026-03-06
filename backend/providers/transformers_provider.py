@@ -17,6 +17,7 @@ Phase 14 변경사항 (Vision/VL 지원):
 import asyncio
 import gc
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from threading import Thread
 from typing import AsyncGenerator
@@ -26,10 +27,23 @@ from .base import BaseProvider
 logger = logging.getLogger(__name__)
 
 # 모듈 레벨 캐시: model_id → model / tokenizer / is_vl
+import time
 _model_cache: dict = {}
 _tokenizer_cache: dict = {}
 _is_vl_cache: dict = {}  # model_id → bool (True: VL processor, False: text tokenizer)
+_last_used: dict = {}    # model_id → float (last used timestamp)
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="transformers")
+
+
+# ── 컨텍스트 길이 조회 ─────────────────────────────────────────────────────────
+
+def _get_context_length(model_id: str) -> int:
+    """MODEL_REGISTRY에서 모델의 최대 컨텍스트 길이 조회. 미등록 시 4096 반환."""
+    try:
+        from config import MODEL_REGISTRY
+        return MODEL_REGISTRY.get(model_id, {}).get("context_length", 4096)
+    except ImportError:
+        return 4096
 
 
 # ── VRAM 유틸리티 ──────────────────────────────────────────────────────────────
@@ -59,6 +73,7 @@ def unload_model(model_id: str) -> bool:
     model = _model_cache.pop(model_id)
     _tokenizer_cache.pop(model_id, None)
     _is_vl_cache.pop(model_id, None)
+    _last_used.pop(model_id, None)
 
     try:
         model.cpu()
@@ -164,8 +179,18 @@ class TransformersProvider(BaseProvider):
         VL 모델(vision_config 포함): AutoProcessor + AutoModelForImageTextToText
         텍스트 모델: AutoTokenizer + AutoModelForCausalLM
         """
+        # 1. Update LRU if already cached
         if self._model_id in _model_cache:
+            _last_used[self._model_id] = time.time()
             return _model_cache[self._model_id], _tokenizer_cache[self._model_id]
+
+        # 2. VRAM Scheduling (OOM Prevention)
+        # 임계값(기본 12GB)을 초과하고 캐시된 모델이 있으면 가장 오래전에 사용된 모델 언로드
+        _vram_threshold = float(os.environ.get("VRAM_EVICT_THRESHOLD_GB", "12.0"))
+        while _vram_allocated_gb() > _vram_threshold and len(_model_cache) > 0:
+            oldest_model = min(_last_used.keys(), key=lambda k: _last_used[k])
+            logger.info("[Transformers] VRAM > %.1fGB! Evicting oldest model: '%s'", _vram_threshold, oldest_model)
+            unload_model(oldest_model)
 
         load_path = self._resolve_load_path()
         is_vl = self._detect_vl(load_path)
@@ -213,6 +238,7 @@ class TransformersProvider(BaseProvider):
         model.eval()
         _model_cache[self._model_id] = model
         _tokenizer_cache[self._model_id] = tokenizer
+        _last_used[self._model_id] = time.time()
         logger.info(
             "[Transformers] '%s' loaded on %s | VRAM: %.2f GB",
             self._model_id, model.device, _vram_allocated_gb(),
@@ -235,8 +261,27 @@ class TransformersProvider(BaseProvider):
 
         def run_generation():
             try:
+                # SSE: 모델 로딩 시작 알림
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        token_queue.put(("__model_loading__", "start")), loop
+                    ).result(timeout=5.0)
+                except Exception:
+                    pass
+
                 model, tokenizer = self._load_model()
                 is_vl = _is_vl_cache.get(self._model_id, False)
+
+                # SSE: 모델 로딩 완료 알림
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        token_queue.put(("__model_loading__", "done")), loop
+                    ).result(timeout=5.0)
+                except Exception:
+                    pass
+
+                # 모델 컨텍스트 길이 조회 (하드코딩 2048 → 모델별 실제 값)
+                ctx_len = _get_context_length(self._model_id)
 
                 if is_vl:
                     # VL 모델: content를 [{type: text, text: ...}] 형태로 전달
@@ -247,7 +292,7 @@ class TransformersProvider(BaseProvider):
                     text = tokenizer.apply_chat_template(
                         messages, tokenize=False, add_generation_prompt=True
                     )
-                    inputs = tokenizer(text=text, return_tensors="pt", truncation=True, max_length=2048)
+                    inputs = tokenizer(text=text, return_tensors="pt", truncation=True, max_length=ctx_len)
                     inputs = {k: v.to(model.device) for k, v in inputs.items()}
                     # VL Processor의 내부 tokenizer를 TextIteratorStreamer에 전달
                     streamer_tok = tokenizer.tokenizer
@@ -265,7 +310,7 @@ class TransformersProvider(BaseProvider):
                     else:
                         text = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
                     inputs = tokenizer(
-                        text, return_tensors="pt", truncation=True, max_length=2048
+                        text, return_tensors="pt", truncation=True, max_length=ctx_len
                     )
                     inputs = {k: v.to(model.device) for k, v in inputs.items()}
                     streamer_tok = tokenizer
@@ -336,8 +381,13 @@ class TransformersProvider(BaseProvider):
             token = await token_queue.get()
             if token is None:
                 break
-            if isinstance(token, tuple) and token[0] == "__error__":
-                raise RuntimeError(token[1])
+            if isinstance(token, tuple):
+                if token[0] == "__error__":
+                    raise RuntimeError(token[1])
+                elif token[0] == "__model_loading__":
+                    import json
+                    yield f"__SSE__:{json.dumps({'type': 'agent_loading', 'status': token[1]})}"
+                    continue
             yield token
 
     # ── 헬스체크 ─────────────────────────────────────────────────────────────

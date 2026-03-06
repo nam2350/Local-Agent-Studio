@@ -40,13 +40,8 @@ def _sse(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
-def _parse_sse(s: str) -> Optional[dict]:
-    if not s.startswith("data: "):
-        return None
-    try:
-        return json.loads(s[6:])
-    except Exception:
-        return None
+# orchestrator의 _parse_sse 재사용 (중복 제거)
+from pipeline.orchestrator import _parse_sse  # noqa: E402
 
 
 # ── Validator 결과 파싱 ────────────────────────────────────────────────────────

@@ -6,8 +6,7 @@ import { FolderOpen, X, Loader2, Trash2, Clock, ChevronRight } from "lucide-reac
 import { useCanvasBridge } from "@/context/CanvasBridgeContext";
 import { usePipeline } from "@/context/PipelineContext";
 import type { Edge, Node } from "@xyflow/react";
-
-const BACKEND = "http://localhost:8000";
+import { BACKEND } from "@/lib/config";
 
 interface PipelineItem {
   id: number;

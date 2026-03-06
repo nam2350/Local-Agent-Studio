@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from typing import AsyncGenerator
 
 import httpx
@@ -11,9 +12,9 @@ from .base import BaseProvider
 logger = logging.getLogger(__name__)
 
 DEFAULT_URLS = {
-    "ollama":    "http://localhost:11434",
-    "lmstudio":  "http://localhost:1234",
-    "llamacpp":  "http://localhost:8080",
+    "ollama":   os.environ.get("OLLAMA_URL",   "http://localhost:11434"),
+    "lmstudio": os.environ.get("LMSTUDIO_URL", "http://localhost:1234"),
+    "llamacpp": os.environ.get("LLAMACPP_URL", "http://localhost:8080"),
 }
 
 

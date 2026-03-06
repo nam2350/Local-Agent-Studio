@@ -10,6 +10,8 @@ import {
   type ReactNode,
 } from "react";
 import { getDefaultConfig, type NodeConfig, type AgentType } from "@/constants/agentDefaults";
+import type { AgentRecord } from "@/components/modals/AgentEditorModal";
+import { BACKEND } from "@/lib/config";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -63,6 +65,18 @@ export type SelectedNodeInfo = {
   agentType: AgentType;
 } | null;
 
+// Phase 19: 모델 메타데이터 타입
+export type ModelMeta = {
+  model_id: string;
+  provider: string;
+  size_bytes: number;
+  family: string;
+  parameter_size: string;
+  quantization: string;
+  format: string;
+  discovered_at: number; // Date.now() — NEW 배지 만료 계산용
+};
+
 type PipelineState = {
   status: PipelineStatus;
   prompt: string;
@@ -77,11 +91,14 @@ type PipelineState = {
   selectedNode: SelectedNodeInfo;
   nodeConfigs: Record<string, NodeConfig>;
   activeParallelStage: ParallelStageInfo;
-  registryAgents: any[];
+  registryAgents: AgentRecord[];
   orchestrationMode: OrchestrationMode;
   retryInfo: RetryInfo | null;
   // Phase 13: 대화 세션
   sessionId: string | null;
+  // Phase 19: 동적 모델 디스커버리
+  modelMetadata: Record<string, ModelMeta[]>; // provider → 메타 배열
+  newModelKeys: Set<string>;                  // "provider:model_id" 형식
 };
 
 type PipelineContextValue = PipelineState & {
@@ -93,6 +110,7 @@ type PipelineContextValue = PipelineState & {
   setNodeConfig: (nodeId: string, patch: Partial<NodeConfig>) => void;
   resetNodeConfig: (nodeId: string, agentType?: AgentType) => void;
   setSessionId: (id: string | null) => void;
+  refreshModels: () => Promise<void>;
   run: () => void;
   stop: () => void;
   reset: () => void;
@@ -120,7 +138,6 @@ const DEFAULT_PROVIDER_STATUS: ProviderStatus = {
 // ─── Context ──────────────────────────────────────────────────────────────────
 
 const PipelineContext = createContext<PipelineContextValue | null>(null);
-const BACKEND = "http://localhost:8000";
 
 export function PipelineProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<PipelineState>({
@@ -137,10 +154,12 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     selectedNode: null,
     nodeConfigs: {},
     activeParallelStage: null,
-    registryAgents: [],
+    registryAgents: [] as AgentRecord[],
     orchestrationMode: "dag",
     retryInfo: null,
     sessionId: null,
+    modelMetadata: {},
+    newModelKeys: new Set<string>(),
   });
 
   const abortRef = useRef<AbortController | null>(null);
@@ -181,6 +200,129 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(id);
   }, []);
 
+  // ── Phase 19: ModelWatcher SSE 구독 ───────────────────────────────────────
+  useEffect(() => {
+    let abortController = new AbortController();
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+    let retryDelay = 2000;
+
+    const handleModelEvent = (event: Record<string, unknown>) => {
+      const type = event.type as string;
+
+      if (type === "model_snapshot") {
+        const provider = event.provider as string;
+        const models = (event.models as Array<Record<string, unknown>>).map((m) => ({
+          ...(m as Omit<ModelMeta, "discovered_at">),
+          discovered_at: Date.now(),
+        })) as ModelMeta[];
+
+        setState((s) => ({
+          ...s,
+          modelMetadata: { ...s.modelMetadata, [provider]: models },
+          availableModels: {
+            ...s.availableModels,
+            [provider]: models.map((m) => m.model_id),
+          },
+        }));
+      }
+
+      if (type === "model_added") {
+        const provider = event.provider as string;
+        const modelId = event.model_id as string;
+        const meta = event.meta as Omit<ModelMeta, "discovered_at">;
+        const key = `${provider}:${modelId}`;
+
+        setState((s) => {
+          const prevMetas = s.modelMetadata[provider] ?? [];
+          const prevIds = s.availableModels[provider] ?? [];
+          if (prevIds.includes(modelId)) return s; // 중복 방지
+
+          const newMeta: ModelMeta = { ...meta, discovered_at: Date.now() };
+          const newKeys = new Set(s.newModelKeys);
+          newKeys.add(key);
+
+          return {
+            ...s,
+            modelMetadata: { ...s.modelMetadata, [provider]: [...prevMetas, newMeta] },
+            availableModels: { ...s.availableModels, [provider]: [...prevIds, modelId] },
+            newModelKeys: newKeys,
+          };
+        });
+
+        // 30초 후 NEW 배지 소멸
+        setTimeout(() => {
+          setState((s) => {
+            const next = new Set(s.newModelKeys);
+            next.delete(key);
+            return { ...s, newModelKeys: next };
+          });
+        }, 30_000);
+      }
+
+      if (type === "model_removed") {
+        const provider = event.provider as string;
+        const modelId = event.model_id as string;
+
+        setState((s) => ({
+          ...s,
+          modelMetadata: {
+            ...s.modelMetadata,
+            [provider]: (s.modelMetadata[provider] ?? []).filter((m) => m.model_id !== modelId),
+          },
+          availableModels: {
+            ...s.availableModels,
+            [provider]: (s.availableModels[provider] ?? []).filter((id) => id !== modelId),
+          },
+        }));
+      }
+      // "ping" 이벤트는 무시
+    };
+
+    const connect = async () => {
+      try {
+        const response = await fetch(`${BACKEND}/api/models/watch`, {
+          signal: abortController.signal,
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        retryDelay = 2000; // 연결 성공 시 딜레이 리셋
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const raw = line.slice(6).trim();
+            if (!raw) continue;
+            try { handleModelEvent(JSON.parse(raw)); } catch { /* skip */ }
+          }
+        }
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === "AbortError") return;
+        // 백엔드 오프라인 — 지수 백오프 재연결 (최대 30초)
+        retryDelay = Math.min(retryDelay * 1.5, 30_000);
+      }
+
+      // 재연결 스케줄
+      if (!abortController.signal.aborted) {
+        retryTimeout = setTimeout(connect, retryDelay);
+      }
+    };
+
+    connect();
+
+    return () => {
+      abortController.abort();
+      if (retryTimeout) clearTimeout(retryTimeout);
+    };
+  }, []); // 마운트 시 1회만
+
   // ── Setters ───────────────────────────────────────────────────────────────
   const setPrompt = useCallback((p: string) => setState((s) => ({ ...s, prompt: p })), []);
   const setUseRealModels = useCallback((v: boolean) => setState((s) => ({ ...s, useRealModels: v })), []);
@@ -205,8 +347,30 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       delete next[nodeId];
       return { ...s, nodeConfigs: next };
     });
-    // suppress unused warning
     void agentType;
+  }, []);
+
+  // Phase 19: 수동 새로고침
+  const refreshModels = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND}/api/models/refresh`, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        const models = data.models as Record<string, Array<Record<string, unknown>>>;
+        setState((s) => {
+          const newMeta: Record<string, ModelMeta[]> = { ...s.modelMetadata };
+          const newAvail: Record<string, string[]> = { ...s.availableModels };
+          for (const [provider, metas] of Object.entries(models)) {
+            newMeta[provider] = (metas as Array<Record<string, unknown>>).map((m) => ({
+              ...(m as Omit<ModelMeta, "discovered_at">),
+              discovered_at: Date.now(),
+            }));
+            newAvail[provider] = newMeta[provider].map((m) => m.model_id);
+          }
+          return { ...s, modelMetadata: newMeta, availableModels: newAvail };
+        });
+      }
+    } catch { /* backend offline */ }
   }, []);
 
   // ── Run pipeline ──────────────────────────────────────────────────────────
@@ -223,17 +387,12 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       error: null,
     }));
 
-    // Build agent_configs from nodeConfigs
     const agentConfigs = Object.entries(state.nodeConfigs).map(([agentId, cfg]) => {
       const activeTools: string[] = [];
       if (cfg.tools?.web_search) activeTools.push("web_search");
-
       return {
         agent_id: agentId,
-        provider: {
-          type: cfg.provider,
-          model_id: cfg.modelId || undefined,
-        },
+        provider: { type: cfg.provider, model_id: cfg.modelId || undefined },
         system_prompt: cfg.systemPrompt || undefined,
         max_tokens: cfg.maxTokens,
         temperature: cfg.temperature,
@@ -251,6 +410,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           default_provider: { type: state.providerType },
           agent_configs: agentConfigs.length > 0 ? agentConfigs : undefined,
           orchestration_mode: state.orchestrationMode,
+          structured_routing: true,
           session_id: state.sessionId,
         }),
         signal: abortRef.current.signal,
@@ -449,6 +609,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         ...state,
         setPrompt, setUseRealModels, setProviderType, setOrchestrationMode,
         setSelectedNode, setNodeConfig, resetNodeConfig, setSessionId,
+        refreshModels,
         run, stop, reset,
       }}
     >

@@ -4,8 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Bot, X, Loader2, CheckCircle2, Trash2, ChevronDown } from "lucide-react";
 import { usePipeline } from "@/context/PipelineContext";
-
-const BACKEND = "http://localhost:8000";
+import { BACKEND } from "@/lib/config";
 
 export type AgentRecord = {
   id: string;

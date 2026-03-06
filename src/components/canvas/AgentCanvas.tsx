@@ -94,31 +94,31 @@ const initialNodes: AgentFlowNode[] = [
     id: "router-1",
     type: "agentNode",
     position: { x: 340, y: 240 },
-    data: { label: "Router", agentType: "router", model: "Qwen2.5-3B-Instruct", status: "idle", tokens: 0, tokensPerSec: 0 },
+    data: { label: "Router", agentType: "router", model: "Qwen/Qwen3.5-4B", status: "idle", tokens: 0, tokensPerSec: 0 },
   },
   {
     id: "coder-1",
     type: "agentNode",
     position: { x: 620, y: 80 },
-    data: { label: "Code Writer", agentType: "coder", model: "Qwen2.5-Coder-7B", status: "idle", tokens: 0, tokensPerSec: 0 },
+    data: { label: "Code Writer", agentType: "coder", model: "LocoreMind/LocoOperator-4B", status: "idle", tokens: 0, tokensPerSec: 0 },
   },
   {
     id: "analyzer-1",
     type: "agentNode",
     position: { x: 620, y: 400 },
-    data: { label: "Analyzer", agentType: "analyzer", model: "Gemma-3-4B-IT", status: "idle", tokens: 0, tokensPerSec: 0 },
+    data: { label: "Analyzer", agentType: "analyzer", model: "Qwen/Qwen3.5-4B", status: "idle", tokens: 0, tokensPerSec: 0 },
   },
   {
     id: "validator-1",
     type: "agentNode",
     position: { x: 900, y: 80 },
-    data: { label: "Validator", agentType: "validator", model: "Phi-4-mini-4B", status: "idle", tokens: 0, tokensPerSec: 0 },
+    data: { label: "Validator", agentType: "validator", model: "microsoft/Phi-4-mini-instruct", status: "idle", tokens: 0, tokensPerSec: 0 },
   },
   {
     id: "synthesizer-1",
     type: "agentNode",
     position: { x: 1160, y: 240 },
-    data: { label: "Synthesizer", agentType: "synthesizer", model: "Llama-3.1-8B-Instruct", status: "idle", tokens: 0, tokensPerSec: 0 },
+    data: { label: "Synthesizer", agentType: "synthesizer", model: "Qwen/Qwen3.5-2B", status: "idle", tokens: 0, tokensPerSec: 0 },
   },
 ];
 

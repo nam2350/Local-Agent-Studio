@@ -3,7 +3,7 @@
 import { useCallback, useMemo } from "react";
 import { motion } from "framer-motion";
 import {
-  ArrowLeft, RotateCcw, Cpu, Thermometer, Hash,
+  ArrowLeft, RotateCcw, Cpu, Thermometer, Hash, AlertTriangle,
   GitBranch, Code2, FlaskConical, Layers, ShieldCheck,
   MessageSquare, Sparkles, ChevronDown, Globe,
 } from "lucide-react";
@@ -123,6 +123,7 @@ export default function NodeConfigPanel() {
     resetNodeConfig,
     providerStatus,
     availableModels,
+    newModelKeys,
     registryAgents,
   } = usePipeline();
 
@@ -142,11 +143,21 @@ export default function NodeConfigPanel() {
   const isInputOutput = agentType === "input" || agentType === "output";
 
   // Model options depending on provider
-  const modelOptions: string[] = useMemo(() => {
-    if (config.provider === "ollama") return availableModels.ollama ?? [];
-    if (config.provider === "lmstudio") return availableModels.lmstudio ?? [];
-    return [];
-  }, [config.provider, availableModels]);
+  const modelOptions: { id: string; isNew: boolean }[] = useMemo(() => {
+    const ids =
+      config.provider === "ollama" ? (availableModels.ollama ?? []) :
+      config.provider === "lmstudio" ? (availableModels.lmstudio ?? []) : [];
+    return ids.map((id) => ({
+      id,
+      isNew: newModelKeys.has(`${config.provider}:${id}`),
+    }));
+  }, [config.provider, availableModels, newModelKeys]);
+
+  // 선택 모델이 목록에서 사라진 경우 감지
+  const selectedModelMissing =
+    modelOptions.length > 0 &&
+    config.modelId !== "" &&
+    !modelOptions.find((m) => m.id === config.modelId);
 
   const providerOnline = (p: ProviderType): boolean => {
     if (p === "simulation") return true;
@@ -311,9 +322,9 @@ export default function NodeConfigPanel() {
                       border: `1px solid ${color}30`,
                     }}
                   >
-                    {modelOptions.map((m) => (
-                      <option key={m} value={m} style={{ background: "#0b1025" }}>
-                        {m}
+                    {modelOptions.map(({ id, isNew }) => (
+                      <option key={id} value={id} style={{ background: "#0b1025" }}>
+                        {isNew ? `[NEW] ${id}` : id}
                       </option>
                     ))}
                   </select>
@@ -330,7 +341,7 @@ export default function NodeConfigPanel() {
                   onChange={(e) => patch({ modelId: e.target.value })}
                   placeholder={
                     config.provider === "transformers"
-                      ? "e.g. Qwen/Qwen2.5-3B-Instruct"
+                      ? "e.g. Qwen/Qwen3.5-4B"
                       : defaults.modelId
                   }
                   className="w-full text-[11px] text-cyber-text font-mono px-2.5 py-2 rounded-lg outline-none placeholder-cyber-subtle"
@@ -345,6 +356,18 @@ export default function NodeConfigPanel() {
                 <p className="text-[9px] text-cyber-subtle mt-1">
                   HuggingFace model ID — downloaded on first run
                 </p>
+              )}
+
+              {selectedModelMissing && (
+                <div
+                  className="flex items-center gap-1.5 mt-1.5 px-2 py-1 rounded"
+                  style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}
+                >
+                  <AlertTriangle size={9} color="#ef4444" />
+                  <span className="text-[9px]" style={{ color: "#ef4444" }}>
+                    Model offline: {config.modelId}
+                  </span>
+                </div>
               )}
             </div>
 
@@ -374,7 +397,7 @@ export default function NodeConfigPanel() {
               label="Max Tokens"
               value={config.maxTokens}
               min={64}
-              max={2048}
+              max={8192}
               step={64}
               display={config.maxTokens.toString()}
               onChange={(v) => patch({ maxTokens: v })}
@@ -480,7 +503,7 @@ export default function NodeConfigPanel() {
                 <div className="flex items-center gap-1.5 mb-1">
                   <Thermometer size={9} className="text-cyber-green" />
                   <span className="text-[9px] text-cyber-green uppercase tracking-wider">
-                    GPU · RTX 5080
+                    GPU Inference
                   </span>
                 </div>
                 <p className="text-[9px] text-cyber-subtle leading-relaxed">

@@ -47,30 +47,3 @@ TOOL_SCHEMAS: list[dict] = [
         },
     },
 ]
-
-# Human-readable tool prompt injection (for models without native tool support)
-TOOL_PROMPT_PREFIX = """You have access to the following tools. Use them when you need external information.
-
-Available tools:
-{tools_list}
-
-To call a tool, output EXACTLY this format (on its own line):
-[TOOL: tool_name] {{"key": "value"}} [/TOOL]
-
-Example:
-[TOOL: web_search] {{"query": "FastAPI JWT authentication"}} [/TOOL]
-
-Wait for the tool result before writing your full response.
----
-"""
-
-
-def build_tool_prompt(enabled_tools: list[str]) -> str:
-    schemas = {s["name"]: s for s in TOOL_SCHEMAS}
-    lines = []
-    for name in enabled_tools:
-        if name in schemas:
-            s = schemas[name]
-            params = list(s["parameters"]["properties"].keys())
-            lines.append(f"- {name}({', '.join(params)}): {s['description']}")
-    return TOOL_PROMPT_PREFIX.format(tools_list="\n".join(lines))
