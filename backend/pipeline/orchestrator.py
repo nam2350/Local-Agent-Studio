@@ -310,6 +310,31 @@ def _resolve_system_prompt(agent: dict, request: RunRequest) -> str:
     return base_prompt
 
 
+def _resolve_rag_context(agent: dict, prompt: str, request: RunRequest) -> Optional[str]:
+    """Phase 22: RAG 컨텍스트를 에이전트 입력 앞에 주입.
+
+    에이전트별 rag_collections 목록에서 각 컬렉션을 검색하여 컨텍스트를 합산.
+    """
+    if not request.agent_configs:
+        return None
+    cfg = next((c for c in request.agent_configs if c.agent_id == agent["id"]), None)
+    if not cfg or not cfg.rag_collections:
+        return None
+
+    try:
+        from rag.retriever import build_rag_context
+    except Exception:
+        return None
+
+    contexts: list[str] = []
+    for col_name in cfg.rag_collections:
+        ctx = build_rag_context(col_name, prompt, top_k=4)
+        if ctx:
+            contexts.append(ctx)
+
+    return "\n\n".join(contexts) if contexts else None
+
+
 def _resolve_max_tokens(agent: dict, request: RunRequest) -> int:
     if request.agent_configs:
         cfg = next((c for c in request.agent_configs if c.agent_id == agent["id"]), None)
@@ -369,6 +394,11 @@ async def _run_single_agent(
     provider    = _resolve_provider(agent, request)
     pname       = provider.provider_type if provider else "simulation"
     agent_input = _build_agent_input(prompt, agent_id, previous_outputs)
+
+    # Phase 22: RAG 컨텍스트 주입 (에이전트별 rag_collections 설정 시)
+    rag_ctx = _resolve_rag_context(agent, prompt, request)
+    if rag_ctx:
+        agent_input = rag_ctx + "\n\n" + agent_input
 
     # agent_start
     yield sse({
@@ -738,6 +768,23 @@ async def run_pipeline(
         "totalPipelineTokens": total_tokens,
         "totalPipelineMs": total_ms,
     })
+
+    # Phase 15: 실행 히스토리 저장
+    try:
+        from db import crud as _crud_run
+        _provider = request.default_provider.type if request.default_provider else "simulation"
+        _mode     = getattr(request, "orchestration_mode", "dag")
+        _crud_run.create_run(
+            prompt=prompt,
+            provider=_provider,
+            orchestration_mode=_mode,
+            status="success",
+            total_tokens=total_tokens,
+            total_ms=total_ms,
+            agent_outputs={aid: out[:800] for aid, out in previous_outputs.items()},
+        )
+    except Exception as _e:
+        logger.warning("[orchestrator] Failed to save run history: %s", _e)
 
     # Phase 13: 대화 세션에 턴 저장
     if session_id:

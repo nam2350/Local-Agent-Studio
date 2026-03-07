@@ -35,6 +35,10 @@ import {
   Trash2,
   ChevronDown,
   ChevronRight,
+  Database,
+  Upload,
+  FileText,
+  Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePipeline, type AgentMetrics, type ProviderType } from "@/context/PipelineContext";
@@ -993,6 +997,402 @@ function MetricsPanel() {
   );
 }
 
+// ─── Run History Panel (Phase 15) ────────────────────────────────────────────
+
+type RunRecord = {
+  id: number;
+  prompt: string;
+  provider: string;
+  orchestration_mode: string;
+  status: string;
+  total_tokens: number;
+  total_ms: number;
+  error_message: string | null;
+  created_at: string;
+  agent_outputs?: Record<string, string>;
+};
+
+const STATUS_COLOR: Record<string, string> = {
+  success: "#10b981",
+  error:   "#ef4444",
+  stopped: "#f59e0b",
+};
+
+// ─── RAG Panel ────────────────────────────────────────────────────────────────
+
+type RagCollection = { name: string; count: number };
+type RagChunk = { text: string; source: string; score: number };
+
+function RagPanel() {
+  const [collections, setCollections] = useState<RagCollection[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadEvents, setUploadEvents] = useState<string[]>([]);
+  const [collectionName, setCollectionName] = useState("default");
+  const [queryText, setQueryText] = useState("");
+  const [queryCol, setQueryCol] = useState("default");
+  const [queryResults, setQueryResults] = useState<RagChunk[]>([]);
+  const [querying, setQuerying] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const fetchCollections = useCallback(async () => {
+    try {
+      const r = await fetch(`${BACKEND}/api/rag/collections`);
+      const d = await r.json();
+      setCollections(d.collections ?? []);
+    } catch {}
+  }, []);
+
+  useEffect(() => { fetchCollections(); }, [fetchCollections]);
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setUploadEvents([`Uploading ${file.name}…`]);
+
+    const fd = new FormData();
+    fd.append("file", file);
+
+    try {
+      const res = await fetch(
+        `${BACKEND}/api/rag/upload?collection=${encodeURIComponent(collectionName)}`,
+        { method: "POST", body: fd }
+      );
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const lines = decoder.decode(value).split("\n");
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.type === "rag_parse") setUploadEvents((p) => [...p, `Parsing ${ev.file}…`]);
+            else if (ev.type === "rag_chunks") setUploadEvents((p) => [...p, `${ev.total} chunks created`]);
+            else if (ev.type === "rag_progress") setUploadEvents((p) => [...p, `Stored ${ev.stored}/${ev.total} (${ev.pct}%)`]);
+            else if (ev.type === "rag_done") setUploadEvents((p) => [...p, `✓ Done — ${ev.chunks} chunks indexed`]);
+            else if (ev.type === "rag_error") setUploadEvents((p) => [...p, `Error: ${ev.message}`]);
+          } catch {}
+        }
+      }
+    } catch (err) {
+      setUploadEvents((p) => [...p, `Upload failed: ${err}`]);
+    } finally {
+      setUploading(false);
+      fetchCollections();
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  const handleQuery = async () => {
+    if (!queryText.trim() || !queryCol) return;
+    setQuerying(true);
+    setQueryResults([]);
+    try {
+      const r = await fetch(`${BACKEND}/api/rag/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ collection: queryCol, query: queryText, top_k: 4 }),
+      });
+      const d = await r.json();
+      setQueryResults(d.chunks ?? []);
+    } catch {}
+    setQuerying(false);
+  };
+
+  const handleDelete = async (name: string) => {
+    if (!window.confirm(`Delete collection "${name}"?`)) return;
+    await fetch(`${BACKEND}/api/rag/collections/${encodeURIComponent(name)}`, { method: "DELETE" });
+    fetchCollections();
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Upload section */}
+      <div
+        className="rounded-lg p-3"
+        style={{ background: "rgba(16,185,129,0.04)", border: "1px solid rgba(16,185,129,0.15)" }}
+      >
+        <div className="flex items-center gap-1.5 mb-2">
+          <Upload size={10} className="text-cyber-green" />
+          <span className="text-[10px] text-cyber-green uppercase tracking-widest font-semibold">Upload Document</span>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <div>
+            <p className="text-[9px] text-cyber-muted mb-1">Collection Name</p>
+            <input
+              value={collectionName}
+              onChange={(e) => setCollectionName(e.target.value)}
+              placeholder="default"
+              className="w-full text-[10px] font-mono px-2 py-1.5 rounded outline-none text-cyber-text"
+              style={{ background: "rgba(11,16,37,0.8)", border: "1px solid rgba(16,185,129,0.3)" }}
+            />
+          </div>
+
+          <button
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading}
+            className="flex items-center justify-center gap-1.5 py-1.5 rounded text-[10px] font-medium transition-all"
+            style={{
+              background: uploading ? "rgba(100,116,139,0.1)" : "rgba(16,185,129,0.12)",
+              border: "1px solid rgba(16,185,129,0.3)",
+              color: uploading ? "#64748b" : "#10b981",
+            }}
+          >
+            <FileText size={10} />
+            {uploading ? "Uploading…" : "Choose File (PDF / TXT / MD / PY / TS…)"}
+          </button>
+          <input ref={fileRef} type="file" accept=".pdf,.txt,.md,.py,.ts,.tsx,.js,.json,.csv" className="hidden" onChange={handleUpload} />
+        </div>
+
+        {uploadEvents.length > 0 && (
+          <div className="mt-2 flex flex-col gap-0.5">
+            {uploadEvents.slice(-6).map((ev, i) => (
+              <p key={i} className="text-[9px] font-mono text-cyber-muted">{ev}</p>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Collections */}
+      <div
+        className="rounded-lg p-3"
+        style={{ background: "rgba(11,16,37,0.6)", border: "1px solid rgba(255,255,255,0.06)" }}
+      >
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-1.5">
+            <Database size={10} className="text-cyber-cyan" />
+            <span className="text-[10px] text-cyber-cyan uppercase tracking-widest font-semibold">Collections</span>
+          </div>
+          <button onClick={fetchCollections} className="text-[9px] text-cyber-muted hover:text-cyber-text">
+            <RefreshCw size={9} />
+          </button>
+        </div>
+
+        {collections.length === 0 ? (
+          <p className="text-[9px] text-cyber-subtle italic">No collections yet</p>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {collections.map((col) => (
+              <div
+                key={col.name}
+                className="flex items-center justify-between px-2 py-1.5 rounded"
+                style={{ background: "rgba(34,211,238,0.06)", border: "1px solid rgba(34,211,238,0.12)" }}
+              >
+                <div>
+                  <p className="text-[10px] font-mono text-cyber-cyan">{col.name}</p>
+                  <p className="text-[9px] text-cyber-subtle">{col.count} chunks</p>
+                </div>
+                <button
+                  onClick={() => handleDelete(col.name)}
+                  className="p-1 rounded hover:bg-red-500/10 transition-colors"
+                >
+                  <Trash2 size={9} color="#ef4444" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Query tester */}
+      <div
+        className="rounded-lg p-3"
+        style={{ background: "rgba(168,85,247,0.04)", border: "1px solid rgba(168,85,247,0.15)" }}
+      >
+        <div className="flex items-center gap-1.5 mb-2">
+          <Search size={10} className="text-cyber-purple" />
+          <span className="text-[10px] text-cyber-purple uppercase tracking-widest font-semibold">Search Test</span>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <div className="relative">
+            <select
+              value={queryCol}
+              onChange={(e) => setQueryCol(e.target.value)}
+              className="w-full appearance-none text-[10px] font-mono px-2 py-1.5 pr-6 rounded outline-none text-cyber-text"
+              style={{ background: "rgba(11,16,37,0.8)", border: "1px solid rgba(168,85,247,0.3)" }}
+            >
+              {collections.map((c) => (
+                <option key={c.name} value={c.name} style={{ background: "#0b1025" }}>{c.name}</option>
+              ))}
+              {collections.length === 0 && <option value="" disabled>No collections</option>}
+            </select>
+            <ChevronDown size={10} className="absolute right-2 top-1/2 -translate-y-1/2 text-cyber-muted pointer-events-none" />
+          </div>
+
+          <input
+            value={queryText}
+            onChange={(e) => setQueryText(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleQuery()}
+            placeholder="Search query…"
+            className="w-full text-[10px] px-2 py-1.5 rounded outline-none text-cyber-text placeholder-cyber-subtle font-mono"
+            style={{ background: "rgba(11,16,37,0.8)", border: "1px solid rgba(168,85,247,0.3)" }}
+          />
+
+          <button
+            onClick={handleQuery}
+            disabled={querying || collections.length === 0}
+            className="py-1.5 rounded text-[10px] font-medium transition-all"
+            style={{
+              background: querying ? "rgba(100,116,139,0.1)" : "rgba(168,85,247,0.12)",
+              border: "1px solid rgba(168,85,247,0.3)",
+              color: querying ? "#64748b" : "#a855f7",
+            }}
+          >
+            {querying ? "Searching…" : "Search"}
+          </button>
+        </div>
+
+        {queryResults.length > 0 && (
+          <div className="mt-2 flex flex-col gap-1.5">
+            {queryResults.map((c, i) => (
+              <div
+                key={i}
+                className="rounded p-2"
+                style={{ background: "rgba(168,85,247,0.06)", border: "1px solid rgba(168,85,247,0.12)" }}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[9px] font-mono text-cyber-subtle">{c.source}</span>
+                  <span className="text-[9px] font-mono" style={{ color: "#a855f7" }}>
+                    {(c.score * 100).toFixed(1)}%
+                  </span>
+                </div>
+                <p className="text-[9px] text-cyber-muted leading-relaxed line-clamp-3">{c.text}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+function RunHistoryPanel() {
+  const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const [detail, setDetail] = useState<RunRecord | null>(null);
+
+  const fetchRuns = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${BACKEND}/api/runs?limit=30`);
+      if (res.ok) {
+        const data = await res.json();
+        setRuns(data.runs ?? []);
+        setTotal(data.total ?? 0);
+      }
+    } catch { /* offline */ }
+    finally { setLoading(false); }
+  }, []);
+
+  const fetchDetail = useCallback(async (id: number) => {
+    if (expanded === id) { setExpanded(null); setDetail(null); return; }
+    try {
+      const res = await fetch(`${BACKEND}/api/runs/${id}`);
+      if (res.ok) { setDetail(await res.json()); setExpanded(id); }
+    } catch { /* ignore */ }
+  }, [expanded]);
+
+  const deleteRun = useCallback(async (id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await fetch(`${BACKEND}/api/runs/${id}`, { method: "DELETE" });
+      setRuns((prev) => prev.filter((r) => r.id !== id));
+      setTotal((t) => t - 1);
+      if (expanded === id) { setExpanded(null); setDetail(null); }
+    } catch { /* ignore */ }
+  }, [expanded]);
+
+  useEffect(() => { fetchRuns(); }, [fetchRuns]);
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] text-cyber-muted font-medium">
+          실행 기록 <span className="text-cyber-subtle">({total})</span>
+        </span>
+        <button onClick={fetchRuns} disabled={loading} className="text-cyber-subtle hover:text-cyber-muted transition-colors disabled:opacity-40">
+          <RefreshCw size={9} className={loading ? "animate-spin" : ""} />
+        </button>
+      </div>
+
+      {runs.length === 0 ? (
+        <div className="rounded-lg px-3 py-6 flex flex-col items-center gap-2"
+          style={{ background: "rgba(11,16,37,0.4)", border: "1px solid rgba(255,255,255,0.04)" }}>
+          <TrendingUp size={18} className="text-cyber-subtle" />
+          <p className="text-[9px] text-cyber-subtle text-center">아직 실행 기록이 없습니다.<br />파이프라인을 실행하면 자동으로 저장됩니다.</p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1">
+          {runs.map((run) => {
+            const isExpanded = expanded === run.id;
+            const statusColor = STATUS_COLOR[run.status] ?? "#64748b";
+            const date = new Date(run.created_at).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+            return (
+              <div key={run.id}>
+                <div
+                  className="rounded-lg px-2.5 py-2 cursor-pointer transition-all"
+                  style={{
+                    background: isExpanded ? "rgba(34,211,238,0.05)" : "rgba(11,16,37,0.4)",
+                    border: `1px solid ${isExpanded ? "rgba(34,211,238,0.2)" : "rgba(255,255,255,0.06)"}`,
+                  }}
+                  onClick={() => fetchDetail(run.id)}
+                >
+                  <div className="flex items-center gap-1.5 mb-1">
+                    {isExpanded
+                      ? <ChevronDown size={9} className="text-cyber-muted flex-shrink-0" />
+                      : <ChevronRight size={9} className="text-cyber-muted flex-shrink-0" />
+                    }
+                    <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: statusColor }} />
+                    <span className="text-[10px] text-cyber-text flex-1 truncate" title={run.prompt}>{run.prompt}</span>
+                    <button onClick={(e) => deleteRun(run.id, e)} className="text-cyber-subtle hover:text-cyber-red transition-colors flex-shrink-0">
+                      <Trash2 size={8} />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 ml-5">
+                    <span className="text-[8px] font-mono text-cyber-subtle">{date}</span>
+                    <span className="text-[8px] font-mono text-cyber-muted">{run.total_tokens.toLocaleString()} tok</span>
+                    <span className="text-[8px] font-mono text-cyber-muted">{(run.total_ms / 1000).toFixed(1)}s</span>
+                    <span className="text-[8px] font-mono uppercase px-1 rounded" style={{ color: statusColor, background: `${statusColor}15` }}>
+                      {run.provider}
+                    </span>
+                  </div>
+                </div>
+
+                {isExpanded && detail && detail.id === run.id && detail.agent_outputs && (
+                  <div className="mt-1 ml-2 flex flex-col gap-1">
+                    {Object.entries(detail.agent_outputs).map(([agentId, output]) => {
+                      const meta = ROLE_META[agentId.split("-")[0]] ?? DEFAULT_ROLE_META;
+                      return (
+                        <div key={agentId} className="rounded px-2 py-1.5"
+                          style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.04)" }}>
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <div className="w-1.5 h-1.5 rounded-full" style={{ background: meta.color }} />
+                            <span className="text-[8px] font-bold text-cyber-muted uppercase">{agentId}</span>
+                          </div>
+                          <p className="text-[8px] text-cyber-text leading-relaxed line-clamp-4 whitespace-pre-wrap font-mono">
+                            {output}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Conversation History Panel (Phase 13) ────────────────────────────────────
 
 type SessionSummary = { id: string; title: string; created_at: string; updated_at: string; turn_count: number };
@@ -1245,7 +1645,7 @@ function ProvidersPanel() {
 export default function RightPanel() {
   const { agentMetrics, totalTokens, totalMs, status, selectedNode, activeParallelStage } = usePipeline();
   const [uptime, setUptime] = useState(0);
-  const [activeTab, setActiveTab] = useState<"agents" | "output" | "metrics" | "providers" | "models" | "chat">("agents");
+  const [activeTab, setActiveTab] = useState<"agents" | "output" | "metrics" | "providers" | "models" | "chat" | "history" | "rag">("agents");
   const [registryAgents, setRegistryAgents] = useState<AgentRecord[]>([]);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentRecord | undefined>(undefined);
@@ -1395,6 +1795,8 @@ export default function RightPanel() {
           { key: "providers", label: "Prvdrs" },
           { key: "models",    label: "Models" },
           { key: "chat",      label: "Chat" },
+          { key: "history",   label: "History" },
+          { key: "rag",       label: "RAG" },
         ] as const).map(({ key, label }) => (
           <button
             key={key}
@@ -1541,6 +1943,18 @@ export default function RightPanel() {
             </motion.div>
           )}
 
+          {activeTab === "history" && (
+            <motion.div
+              key="history"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+            >
+              <RunHistoryPanel />
+            </motion.div>
+          )}
+
           {activeTab === "providers" && (
             <motion.div
               key="providers"
@@ -1615,6 +2029,18 @@ export default function RightPanel() {
                   </div>
                 ))}
               </div>
+            </motion.div>
+          )}
+          {activeTab === "rag" && (
+            <motion.div
+              key="rag"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="flex flex-col gap-3"
+            >
+              <RagPanel />
             </motion.div>
           )}
         </AnimatePresence>

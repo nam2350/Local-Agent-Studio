@@ -13,6 +13,7 @@ export type NodeConfig = {
   tools?: {
     web_search?: boolean;
   };
+  ragCollections?: string[];  // Phase 22: RAG 컬렉션 이름 목록
 };
 
 // ─── Per-agentType defaults ───────────────────────────────────────────────────

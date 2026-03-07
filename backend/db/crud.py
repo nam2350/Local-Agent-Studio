@@ -128,6 +128,67 @@ def delete_agent(agent_id: str) -> None:
         conn.commit()
 
 
+# ── Pipeline Run History CRUD (Phase 15) ──────────────────────────────────────
+
+def create_run(
+    prompt: str,
+    provider: str,
+    orchestration_mode: str,
+    status: str,
+    total_tokens: int,
+    total_ms: int,
+    agent_outputs: dict,
+    error_message: str | None = None,
+) -> int:
+    import json as _json
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "INSERT INTO pipeline_runs "
+            "(prompt, provider, orchestration_mode, status, total_tokens, total_ms, agent_outputs_json, error_message) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (prompt, provider, orchestration_mode, status,
+             total_tokens, total_ms, _json.dumps(agent_outputs, ensure_ascii=False), error_message),
+        )
+        conn.commit()
+        return cursor.lastrowid  # type: ignore[return-value]
+
+
+def list_runs(limit: int = 50, offset: int = 0) -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, prompt, provider, orchestration_mode, status, "
+            "total_tokens, total_ms, error_message, created_at "
+            "FROM pipeline_runs ORDER BY id DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_run(run_id: int) -> dict | None:
+    import json as _json
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM pipeline_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["agent_outputs"] = _json.loads(d.pop("agent_outputs_json", "{}"))
+        return d
+
+
+def delete_run(run_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM pipeline_runs WHERE id = ?", (run_id,))
+        conn.commit()
+
+
+def count_runs() -> int:
+    with get_connection() as conn:
+        row = conn.execute("SELECT COUNT(*) as c FROM pipeline_runs").fetchone()
+        return row["c"] if row else 0
+
+
 # ── Conversation CRUD (Phase 13) ──────────────────────────────────────────────
 
 def create_session(session_id: str, title: str) -> None:

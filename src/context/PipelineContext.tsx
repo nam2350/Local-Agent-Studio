@@ -397,6 +397,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         max_tokens: cfg.maxTokens,
         temperature: cfg.temperature,
         tools: activeTools.length > 0 ? activeTools : undefined,
+        rag_collections: cfg.ragCollections && cfg.ragCollections.length > 0 ? cfg.ragCollections : undefined,
       };
     });
 

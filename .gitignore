@@ -84,6 +84,9 @@ venv.bak/
 backend/studio.db
 *.sqlite3
 
+# ChromaDB vector store data
+backend/rag_data/
+
 # Local HF Model Weights (multi-GB)
 backend/models/*
 !backend/models/.gitkeep

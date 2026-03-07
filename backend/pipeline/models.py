@@ -14,7 +14,8 @@ class AgentRunConfig(BaseModel):
     system_prompt: Optional[str] = None
     max_tokens: int = 512
     temperature: float = 0.7
-    tools: Optional[List[str]] = None   # e.g. ["web_search", "calculator"]
+    tools: Optional[List[str]] = None       # e.g. ["web_search", "calculator"]
+    rag_collections: Optional[List[str]] = None  # Phase 22: RAG 컬렉션 이름 목록
 
 
 class RunRequest(BaseModel):

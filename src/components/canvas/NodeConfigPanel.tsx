@@ -1,14 +1,15 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import {
   ArrowLeft, RotateCcw, Cpu, Thermometer, Hash, AlertTriangle,
   GitBranch, Code2, FlaskConical, Layers, ShieldCheck,
-  MessageSquare, Sparkles, ChevronDown, Globe,
+  MessageSquare, Sparkles, ChevronDown, Globe, Database, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePipeline, type ProviderType } from "@/context/PipelineContext";
+import { BACKEND } from "@/lib/config";
 import { getDefaultConfig, type AgentType, type NodeConfig } from "@/constants/agentDefaults";
 
 // ─── Agent type config ────────────────────────────────────────────────────────
@@ -111,6 +112,76 @@ function SliderRow({
     </div>
   );
 }
+
+// ─── RAG Collections Picker ───────────────────────────────────────────────────
+
+function RagCollectionsSection({
+  selected,
+  onChange,
+  color,
+}: {
+  selected: string[];
+  onChange: (cols: string[]) => void;
+  color: string;
+}) {
+  const [collections, setCollections] = useState<{ name: string; count: number }[]>([]);
+
+  useEffect(() => {
+    fetch(`${BACKEND}/api/rag/collections`)
+      .then((r) => r.json())
+      .then((d) => setCollections(d.collections ?? []))
+      .catch(() => {});
+  }, []);
+
+  const toggle = (name: string) => {
+    if (selected.includes(name)) {
+      onChange(selected.filter((c) => c !== name));
+    } else {
+      onChange([...selected, name]);
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 mb-2">
+        <Database size={9} style={{ color }} />
+        <SectionLabel>Knowledge Base (RAG)</SectionLabel>
+      </div>
+
+      {collections.length === 0 ? (
+        <p className="text-[9px] text-cyber-subtle italic">
+          No collections — upload documents in the RAG tab
+        </p>
+      ) : (
+        <div className="flex flex-col gap-1">
+          {collections.map((col) => {
+            const active = selected.includes(col.name);
+            return (
+              <button
+                key={col.name}
+                onClick={() => toggle(col.name)}
+                className="flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-all duration-150"
+                style={
+                  active
+                    ? { background: `${color}18`, border: `1px solid ${color}40` }
+                    : { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }
+                }
+              >
+                <span className="text-[10px]" style={{ color: active ? color : "#64748b" }}>
+                  {col.name}
+                </span>
+                <span className="text-[9px] font-mono text-cyber-subtle">
+                  {col.count} chunks
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
@@ -458,6 +529,13 @@ export default function NodeConfigPanel() {
                 </div>
               </div>
             </div>
+
+            {/* ── RAG Collections (Phase 22) ────────────────────────── */}
+            <RagCollectionsSection
+              selected={config.ragCollections ?? []}
+              onChange={(cols) => patch({ ragCollections: cols })}
+              color={color}
+            />
 
             {/* ── Config summary ────────────────────────────────────── */}
             <div

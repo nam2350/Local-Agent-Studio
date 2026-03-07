@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pipeline.models import RunRequest
@@ -485,6 +485,116 @@ def delete_conversation(session_id: str):
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
     crud.delete_session(session_id)
     return {"ok": True}
+
+
+# ─── Run History (Phase 15) ───────────────────────────────────────────────────
+
+@app.get("/api/runs")
+def list_runs(limit: int = 50, offset: int = 0):
+    """파이프라인 실행 히스토리 목록 (최신순)."""
+    return {
+        "runs": crud.list_runs(limit=limit, offset=offset),
+        "total": crud.count_runs(),
+    }
+
+
+@app.get("/api/runs/{run_id}")
+def get_run(run_id: int):
+    """특정 실행 히스토리 상세 (에이전트별 출력 포함)."""
+    row = crud.get_run(run_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Run #{run_id} not found")
+    return row
+
+
+@app.delete("/api/runs/{run_id}")
+def delete_run(run_id: int):
+    """실행 히스토리 삭제."""
+    if not crud.get_run(run_id):
+        raise HTTPException(status_code=404, detail=f"Run #{run_id} not found")
+    crud.delete_run(run_id)
+    return {"ok": True}
+
+
+# ─── RAG (Phase 22) ───────────────────────────────────────────────────────────
+
+@app.get("/api/rag/collections")
+def list_rag_collections():
+    """ChromaDB 컬렉션 목록 + 청크 수 반환."""
+    from rag.store import list_collections
+    return {"collections": list_collections()}
+
+
+@app.delete("/api/rag/collections/{collection_name}")
+def delete_rag_collection(collection_name: str):
+    """RAG 컬렉션 삭제."""
+    from rag.store import delete_collection
+    ok = delete_collection(collection_name)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' not found")
+    return {"ok": True}
+
+
+class RagQueryRequest(BaseModel):
+    collection: str
+    query: str
+    top_k: int = 5
+    min_score: float = 0.3
+
+
+@app.post("/api/rag/query")
+def rag_query(body: RagQueryRequest):
+    """RAG 검색: 쿼리와 유사한 청크 반환."""
+    from rag.retriever import retrieve
+    chunks = retrieve(body.collection, body.query, top_k=body.top_k, min_score=body.min_score)
+    return {"chunks": chunks, "count": len(chunks)}
+
+
+@app.post("/api/rag/upload")
+async def rag_upload(
+    req: Request,
+    collection: str,
+    file: UploadFile,
+):
+    """문서 파일을 파싱 → 청크 → 임베딩 → ChromaDB 저장. 진행률을 SSE로 스트리밍."""
+    import tempfile
+    import shutil
+    from pathlib import Path as _Path
+    from rag.ingest import ingest_file
+
+    def sse_r(data: dict) -> str:
+        return f"data: {json.dumps(data)}\n\n"
+
+    # 임시 파일에 저장
+    suffix = _Path(file.filename or "upload").suffix or ".txt"
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    try:
+        shutil.copyfileobj(file.file, tmp)
+        tmp.flush()
+        tmp_path = _Path(tmp.name)
+    finally:
+        tmp.close()
+
+    async def generate():
+        try:
+            async for event in ingest_file(collection, tmp_path, file.filename or "upload"):
+                yield sse_r(event)
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
 
 
 @app.post("/api/run")

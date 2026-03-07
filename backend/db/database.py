@@ -123,6 +123,22 @@ def init_db() -> None:
             )
         """)
 
+        # ── Phase 15: 파이프라인 실행 히스토리 ────────────────────────────────────
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS pipeline_runs (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                prompt              TEXT NOT NULL,
+                provider            TEXT DEFAULT 'simulation',
+                orchestration_mode  TEXT DEFAULT 'dag',
+                status              TEXT DEFAULT 'success',
+                total_tokens        INTEGER DEFAULT 0,
+                total_ms            INTEGER DEFAULT 0,
+                agent_outputs_json  TEXT DEFAULT '{}',
+                error_message       TEXT,
+                created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         count = conn.execute("SELECT COUNT(*) as c FROM agent_registry").fetchone()["c"]
         if count == 0:
             seed_agents = [
