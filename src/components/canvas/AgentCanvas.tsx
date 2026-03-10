@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -20,7 +20,7 @@ import {
 } from "@xyflow/react";
 import dagre from "@dagrejs/dagre";
 import { motion } from "framer-motion";
-import { LayoutDashboard } from "lucide-react";
+import { LayoutDashboard, Copy, Trash2, Settings } from "lucide-react";
 import { usePipeline } from "@/context/PipelineContext";
 import { useCanvasBridge } from "@/context/CanvasBridgeContext";
 import AgentNode, { type AgentNodeData } from "./AgentNode";
@@ -58,12 +58,12 @@ type AgentFlowNode = Node<AgentNodeData>;
 // ─── Edge color map ───────────────────────────────────────────────────────────
 
 const EDGE_COLORS: Record<string, string> = {
-  "e-input-router":    "#22d3ee",
-  "e-router-coder":    "#a855f7",
+  "e-input-router": "#22d3ee",
+  "e-router-coder": "#a855f7",
   "e-router-analyzer": "#f472b6",
   "e-coder-validator": "#f59e0b",
-  "e-coder-synth":     "#22d3ee",
-  "e-analyzer-synth":  "#22d3ee",
+  "e-coder-synth": "#22d3ee",
+  "e-analyzer-synth": "#22d3ee",
   "e-validator-synth": "#10b981",
 };
 
@@ -123,13 +123,13 @@ const initialNodes: AgentFlowNode[] = [
 ];
 
 const initialEdges: Edge[] = [
-  edgeBase("#22d3ee", "e-input-router",    "input-1",   "router-1"),
-  edgeBase("#a855f7", "e-router-coder",    "router-1",  "coder-1"),
-  edgeBase("#f472b6", "e-router-analyzer", "router-1",  "analyzer-1"),
-  edgeBase("#f59e0b", "e-coder-validator", "coder-1",   "validator-1"),
-  edgeBase("#22d3ee", "e-coder-synth",     "coder-1",   "synthesizer-1"),
-  edgeBase("#22d3ee", "e-analyzer-synth",  "analyzer-1","synthesizer-1"),
-  edgeBase("#10b981", "e-validator-synth", "validator-1","synthesizer-1"),
+  edgeBase("#22d3ee", "e-input-router", "input-1", "router-1"),
+  edgeBase("#a855f7", "e-router-coder", "router-1", "coder-1"),
+  edgeBase("#f472b6", "e-router-analyzer", "router-1", "analyzer-1"),
+  edgeBase("#f59e0b", "e-coder-validator", "coder-1", "validator-1"),
+  edgeBase("#22d3ee", "e-coder-synth", "coder-1", "synthesizer-1"),
+  edgeBase("#22d3ee", "e-analyzer-synth", "analyzer-1", "synthesizer-1"),
+  edgeBase("#10b981", "e-validator-synth", "validator-1", "synthesizer-1"),
 ];
 
 // ─── Inner canvas (needs ReactFlowProvider context) ───────────────────────────
@@ -141,6 +141,52 @@ function CanvasInner() {
   const { screenToFlowPosition, fitView } = useReactFlow();
   const { getStateRef, setStateRef } = useCanvasBridge();
   const nodeCounter = useRef(100);
+
+  // ── Context menu 상태 ────────────────────────────────────────────────────
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
+
+  const onNodeContextMenu = useCallback(
+    (event: React.MouseEvent, node: Node) => {
+      event.preventDefault();
+      setCtxMenu({ x: event.clientX, y: event.clientY, nodeId: node.id });
+    },
+    []
+  );
+
+  const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
+
+  const handleDuplicate = useCallback(() => {
+    if (!ctxMenu) return;
+    const orig = nodes.find((n) => n.id === ctxMenu.nodeId);
+    if (!orig) { closeCtxMenu(); return; }
+    const newId = `${(orig.data as AgentNodeData).agentType}-dup-${++nodeCounter.current}`;
+    const newNode: AgentFlowNode = {
+      ...orig,
+      id: newId,
+      position: { x: orig.position.x + 40, y: orig.position.y + 40 },
+      data: { ...orig.data as AgentNodeData, status: "idle", tokens: 0, tokensPerSec: 0 },
+      selected: false,
+    };
+    setNodes((nds) => [...nds, newNode]);
+    closeCtxMenu();
+  }, [ctxMenu, nodes, setNodes, closeCtxMenu]);
+
+  const handleDeleteNode = useCallback(() => {
+    if (!ctxMenu) return;
+    setNodes((nds) => nds.filter((n) => n.id !== ctxMenu.nodeId));
+    setEdges((eds) => eds.filter((e) => e.source !== ctxMenu.nodeId && e.target !== ctxMenu.nodeId));
+    closeCtxMenu();
+  }, [ctxMenu, setNodes, setEdges, closeCtxMenu]);
+
+  const handleOpenSettings = useCallback(() => {
+    if (!ctxMenu) return;
+    const node = nodes.find((n) => n.id === ctxMenu.nodeId);
+    if (node) {
+      const data = node.data as AgentNodeData;
+      setSelectedNode({ id: node.id, label: data.label, agentType: data.agentType as AgentType });
+    }
+    closeCtxMenu();
+  }, [ctxMenu, nodes, setSelectedNode, closeCtxMenu]);
 
   // ── Auto-layout ───────────────────────────────────────────────────────────
   const handleAutoLayout = useCallback(() => {
@@ -199,7 +245,7 @@ function CanvasInner() {
         const baseColor = (edge.data as { baseColor?: string })?.baseColor ??
           EDGE_COLORS[edge.id] ?? "#22d3ee";
 
-        const sourceDone    = agentMetrics[edge.source]?.status === "done";
+        const sourceDone = agentMetrics[edge.source]?.status === "done";
         const sourceRunning = agentMetrics[edge.source]?.status === "running";
         const targetRunning = agentMetrics[edge.target]?.status === "running";
 
@@ -209,10 +255,10 @@ function CanvasInner() {
           ...edge,
           style: isGlowing
             ? {
-                strokeWidth: 2.5,
-                stroke: baseColor,
-                filter: `drop-shadow(0 0 5px ${baseColor}) drop-shadow(0 0 10px ${baseColor}60)`,
-              }
+              strokeWidth: 2.5,
+              stroke: baseColor,
+              filter: `drop-shadow(0 0 5px ${baseColor}) drop-shadow(0 0 10px ${baseColor}60)`,
+            }
             : { strokeWidth: 1.5, stroke: `${baseColor}55` },
           markerEnd: {
             type: MarkerType.ArrowClosed,
@@ -353,7 +399,8 @@ function CanvasInner() {
         onDrop={onDrop}
         onDragOver={onDragOver}
         onNodeClick={onNodeClick}
-        onPaneClick={onPaneClick}
+        onNodeContextMenu={onNodeContextMenu}
+        onPaneClick={(e) => { onPaneClick(); closeCtxMenu(); }}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         fitView
@@ -371,6 +418,36 @@ function CanvasInner() {
         <Controls showInteractive={false} style={{ bottom: 16, left: 16 }} />
         <MiniMap nodeStrokeWidth={2} pannable zoomable style={{ bottom: 16, right: 16 }} />
       </ReactFlow>
+
+      {/* Context menu */}
+      {ctxMenu && (
+        <div
+          className="fixed z-50 rounded-xl overflow-hidden shadow-2xl"
+          style={{
+            left: ctxMenu.x,
+            top: ctxMenu.y,
+            background: "rgba(7, 10, 22, 0.98)",
+            border: "1px solid rgba(34, 211, 238, 0.15)",
+            minWidth: 160,
+          }}
+        >
+          <div className="p-1">
+            <button onClick={handleDuplicate}
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-cyber-muted hover:text-cyber-cyan hover:bg-cyber-cyan/10 transition-colors">
+              <Copy size={12} /> 복제
+            </button>
+            <button onClick={handleOpenSettings}
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-cyber-muted hover:text-cyber-cyan hover:bg-cyber-cyan/10 transition-colors">
+              <Settings size={12} /> 설정 열기
+            </button>
+            <div className="my-0.5 mx-2 h-px bg-white/[0.06]" />
+            <button onClick={handleDeleteNode}
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-cyber-muted hover:text-red-400 hover:bg-red-400/10 transition-colors">
+              <Trash2 size={12} /> 삭제
+            </button>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }

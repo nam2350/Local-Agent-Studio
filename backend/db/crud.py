@@ -93,12 +93,13 @@ def create_agent(
     system_prompt: str,
     max_tokens: int = 512,
     temperature: float = 0.7,
+    tools: str = "[]",
 ) -> None:
     with get_connection() as conn:
         conn.execute(
-            "INSERT INTO agent_registry (id, name, role, provider_type, model_id, system_prompt, max_tokens, temperature) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (agent_id, name, role, provider_type, model_id, system_prompt, max_tokens, temperature),
+            "INSERT INTO agent_registry (id, name, role, provider_type, model_id, system_prompt, max_tokens, temperature, tools) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (agent_id, name, role, provider_type, model_id, system_prompt, max_tokens, temperature, tools),
         )
         conn.commit()
 
@@ -112,12 +113,13 @@ def update_agent(
     system_prompt: str,
     max_tokens: int,
     temperature: float,
+    tools: str = "[]",
 ) -> None:
     with get_connection() as conn:
         conn.execute(
             "UPDATE agent_registry SET name=?, role=?, provider_type=?, model_id=?, "
-            "system_prompt=?, max_tokens=?, temperature=? WHERE id=?",
-            (name, role, provider_type, model_id, system_prompt, max_tokens, temperature, agent_id),
+            "system_prompt=?, max_tokens=?, temperature=?, tools=? WHERE id=?",
+            (name, role, provider_type, model_id, system_prompt, max_tokens, temperature, tools, agent_id),
         )
         conn.commit()
 

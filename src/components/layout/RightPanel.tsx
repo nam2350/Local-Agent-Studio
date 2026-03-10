@@ -51,29 +51,29 @@ import React from "react";
 type RoleMeta = { icon: React.ComponentType<{ size?: number; color?: string }>; color: string; vramMax: number };
 
 const ROLE_META: Record<string, RoleMeta> = {
-  router:      { icon: GitBranch,    color: "#22d3ee", vramMax: 8 },
-  coder:       { icon: Code2,        color: "#a855f7", vramMax: 8 },
-  analyzer:    { icon: FlaskConical, color: "#f472b6", vramMax: 8 },
-  validator:   { icon: ShieldCheck,  color: "#f59e0b", vramMax: 8 },
-  synthesizer: { icon: Layers,       color: "#10b981", vramMax: 4 },
-  vision:      { icon: Eye,          color: "#3b82f6", vramMax: 2 },
-  assistant:   { icon: MessageSquare,color: "#64748b", vramMax: 2 },
+  router: { icon: GitBranch, color: "#22d3ee", vramMax: 8 },
+  coder: { icon: Code2, color: "#a855f7", vramMax: 8 },
+  analyzer: { icon: FlaskConical, color: "#f472b6", vramMax: 8 },
+  validator: { icon: ShieldCheck, color: "#f59e0b", vramMax: 8 },
+  synthesizer: { icon: Layers, color: "#10b981", vramMax: 4 },
+  vision: { icon: Eye, color: "#3b82f6", vramMax: 2 },
+  assistant: { icon: MessageSquare, color: "#64748b", vramMax: 2 },
 };
 const DEFAULT_ROLE_META: RoleMeta = { icon: Activity, color: "#64748b", vramMax: 4 };
 
 const PROVIDER_COLORS: Record<ProviderType, string> = {
-  simulation:   "#64748b",
-  ollama:       "#22d3ee",
-  lmstudio:     "#a855f7",
-  llamacpp:     "#f59e0b",
+  simulation: "#64748b",
+  ollama: "#22d3ee",
+  lmstudio: "#a855f7",
+  llamacpp: "#f59e0b",
   transformers: "#10b981",
 };
 
 const PROVIDER_LABELS: Record<ProviderType, string> = {
-  simulation:   "SIM",
-  ollama:       "OLLAMA",
-  lmstudio:     "LMS",
-  llamacpp:     "GGUF",
+  simulation: "SIM",
+  ollama: "OLLAMA",
+  lmstudio: "LMS",
+  llamacpp: "GGUF",
   transformers: "HF",
 };
 
@@ -95,7 +95,7 @@ function VramBar({ used, max, color }: { used: number; max: number; color: strin
 
 function StatusIcon({ status }: { status: AgentMetrics["status"] }) {
   if (status === "running") return <Loader2 size={10} className="animate-spin text-cyber-cyan" />;
-  if (status === "done")    return <CheckCircle2 size={10} className="text-cyber-green" />;
+  if (status === "done") return <CheckCircle2 size={10} className="text-cyber-green" />;
   return <Circle size={10} className="text-cyber-subtle" />;
 }
 
@@ -158,8 +158,8 @@ function AgentRowDB({
             style={{
               color:
                 metrics.status === "running" ? meta.color :
-                metrics.status === "done"    ? "#10b981" :
-                "#64748b",
+                  metrics.status === "done" ? "#10b981" :
+                    "#64748b",
             }}
           >
             {metrics.status}
@@ -223,9 +223,9 @@ function AgentRowDB({
 // ─── Tool call badge ──────────────────────────────────────────────────────────
 
 const TOOL_COLORS: Record<string, string> = {
-  web_search:  "#22d3ee",
-  calculator:  "#f59e0b",
-  read_file:   "#a855f7",
+  web_search: "#22d3ee",
+  calculator: "#f59e0b",
+  read_file: "#a855f7",
 };
 
 function ToolCallBadge({ tool, input, output }: { tool: string; input: Record<string, unknown>; output: string }) {
@@ -824,21 +824,21 @@ function MetricsPanel() {
       id: agent.id,
       label: agent.role.charAt(0).toUpperCase() + agent.role.slice(1),
       color: meta.color,
-      latencyMs:    m?.latencyMs    ?? 0,
+      latencyMs: m?.latencyMs ?? 0,
       tokensPerSec: m?.tokensPerSec ?? 0,
-      tokens:       m?.tokens       ?? 0,
-      status:       m?.status       ?? "idle",
+      tokens: m?.tokens ?? 0,
+      status: m?.status ?? "idle",
     };
   }).filter((a) => a.latencyMs > 0 || a.tokensPerSec > 0 || a.tokens > 0);
 
   const hasData = agentData.length > 0;
-  const maxLatency    = Math.max(...agentData.map((a) => a.latencyMs),    1);
-  const maxTokensSec  = Math.max(...agentData.map((a) => a.tokensPerSec), 1);
-  const maxTokens     = Math.max(...agentData.map((a) => a.tokens),       1);
+  const maxLatency = Math.max(...agentData.map((a) => a.latencyMs), 1);
+  const maxTokensSec = Math.max(...agentData.map((a) => a.tokensPerSec), 1);
+  const maxTokens = Math.max(...agentData.map((a) => a.tokens), 1);
 
   // Bottleneck: agent with highest latency among "done" ones
   const doneAgents = agentData.filter((a) => a.status === "done");
-  const bottleneck  = doneAgents.length > 0
+  const bottleneck = doneAgents.length > 0
     ? doneAgents.reduce((a, b) => (a.latencyMs > b.latencyMs ? a : b))
     : null;
 
@@ -1055,7 +1055,7 @@ type RunRecord = {
 
 const STATUS_COLOR: Record<string, string> = {
   success: "#10b981",
-  error:   "#ef4444",
+  error: "#ef4444",
   stopped: "#f59e0b",
 };
 
@@ -1079,7 +1079,7 @@ function McpPanel() {
       const r = await fetch(`${BACKEND}/api/mcp/servers`);
       const d = await r.json();
       setServers(d.servers ?? []);
-    } catch {}
+    } catch { }
   }, []);
 
   const fetchTools = useCallback(async () => {
@@ -1087,7 +1087,7 @@ function McpPanel() {
       const r = await fetch(`${BACKEND}/api/mcp/tools`);
       const d = await r.json();
       setTools(d.tools ?? []);
-    } catch {}
+    } catch { }
   }, []);
 
   useEffect(() => { fetchServers(); fetchTools(); }, [fetchServers, fetchTools]);
@@ -1241,7 +1241,7 @@ function RagPanel() {
       const r = await fetch(`${BACKEND}/api/rag/collections`);
       const d = await r.json();
       setCollections(d.collections ?? []);
-    } catch {}
+    } catch { }
   }, []);
 
   useEffect(() => { fetchCollections(); }, [fetchCollections]);
@@ -1275,7 +1275,7 @@ function RagPanel() {
             else if (ev.type === "rag_progress") setUploadEvents((p) => [...p, `Stored ${ev.stored}/${ev.total} (${ev.pct}%)`]);
             else if (ev.type === "rag_done") setUploadEvents((p) => [...p, `✓ Done — ${ev.chunks} chunks indexed`]);
             else if (ev.type === "rag_error") setUploadEvents((p) => [...p, `Error: ${ev.message}`]);
-          } catch {}
+          } catch { }
         }
       }
     } catch (err) {
@@ -1299,7 +1299,7 @@ function RagPanel() {
       });
       const d = await r.json();
       setQueryResults(d.chunks ?? []);
-    } catch {}
+    } catch { }
     setQuerying(false);
   };
 
@@ -1473,12 +1473,56 @@ function RagPanel() {
 }
 
 
+// ─── 라인 단위 Diff 유틸 ──────────────────────────────────────────────────────
+function computeLineDiff(a: string, b: string): { type: "same" | "add" | "remove"; text: string }[] {
+  const linesA = a.split("\n");
+  const linesB = b.split("\n");
+  const result: { type: "same" | "add" | "remove"; text: string }[] = [];
+  const max = Math.max(linesA.length, linesB.length);
+  for (let i = 0; i < max; i++) {
+    const la = i < linesA.length ? linesA[i] : undefined;
+    const lb = i < linesB.length ? linesB[i] : undefined;
+    if (la === lb) { result.push({ type: "same", text: la ?? "" }); }
+    else {
+      if (la !== undefined) result.push({ type: "remove", text: la });
+      if (lb !== undefined) result.push({ type: "add", text: lb });
+    }
+  }
+  return result;
+}
+
 function RunHistoryPanel() {
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [detail, setDetail] = useState<RunRecord | null>(null);
+
+  // ── Diff 비교 상태 ──
+  const [compareIds, setCompareIds] = useState<Set<number>>(new Set());
+  const [diffData, setDiffData] = useState<{ a: RunRecord; b: RunRecord } | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+
+  const toggleCompare = useCallback((id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCompareIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else if (next.size < 2) next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleCompare = useCallback(async () => {
+    const ids = Array.from(compareIds);
+    if (ids.length !== 2) return;
+    setDiffLoading(true);
+    try {
+      const [rA, rB] = await Promise.all(ids.map((id) => fetch(`${BACKEND}/api/runs/${id}`).then((r) => r.json())));
+      setDiffData({ a: rA, b: rB });
+    } catch { /* offline */ }
+    finally { setDiffLoading(false); }
+  }, [compareIds]);
 
   const fetchRuns = useCallback(async () => {
     setLoading(true);
@@ -1508,10 +1552,63 @@ function RunHistoryPanel() {
       setRuns((prev) => prev.filter((r) => r.id !== id));
       setTotal((t) => t - 1);
       if (expanded === id) { setExpanded(null); setDetail(null); }
+      setCompareIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
     } catch { /* ignore */ }
   }, [expanded]);
 
   useEffect(() => { fetchRuns(); }, [fetchRuns]);
+
+  // ── Diff View 렌더링 ──
+  if (diffData) {
+    const allAgents = new Set([
+      ...Object.keys(diffData.a.agent_outputs ?? {}),
+      ...Object.keys(diffData.b.agent_outputs ?? {}),
+    ]);
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-cyber-cyan font-bold">Diff 비교</span>
+          <button onClick={() => { setDiffData(null); setCompareIds(new Set()); }}
+            className="text-[9px] text-cyber-muted hover:text-cyber-text transition-colors px-2 py-0.5 rounded"
+            style={{ border: "1px solid rgba(255,255,255,0.1)" }}>
+            닫기
+          </button>
+        </div>
+        <div className="flex gap-2 text-[8px] font-mono text-cyber-muted mb-1">
+          <span className="flex-1 truncate" title={diffData.a.prompt}>A: {diffData.a.prompt.slice(0, 40)}</span>
+          <span className="flex-1 truncate" title={diffData.b.prompt}>B: {diffData.b.prompt.slice(0, 40)}</span>
+        </div>
+        {Array.from(allAgents).map((agentId) => {
+          const outA = (diffData.a.agent_outputs as Record<string, string>)?.[agentId] ?? "";
+          const outB = (diffData.b.agent_outputs as Record<string, string>)?.[agentId] ?? "";
+          const lines = computeLineDiff(outA, outB);
+          const meta = ROLE_META[agentId.split("-")[0]] ?? DEFAULT_ROLE_META;
+          return (
+            <div key={agentId} className="rounded-lg overflow-hidden"
+              style={{ border: "1px solid rgba(255,255,255,0.06)" }}>
+              <div className="flex items-center gap-1.5 px-2 py-1"
+                style={{ background: `${meta.color}15` }}>
+                <div className="w-1.5 h-1.5 rounded-full" style={{ background: meta.color }} />
+                <span className="text-[8px] font-bold text-cyber-muted uppercase">{agentId}</span>
+              </div>
+              <div className="max-h-48 overflow-y-auto text-[8px] font-mono leading-relaxed">
+                {lines.map((line, i) => (
+                  <div key={i} className="px-2 py-px"
+                    style={{
+                      background: line.type === "add" ? "rgba(16,185,129,0.12)" : line.type === "remove" ? "rgba(239,68,68,0.12)" : "transparent",
+                      color: line.type === "add" ? "#10b981" : line.type === "remove" ? "#ef4444" : "rgba(226,232,240,0.7)",
+                    }}>
+                    <span className="mr-1.5 opacity-50 select-none">{line.type === "add" ? "+" : line.type === "remove" ? "−" : " "}</span>
+                    {line.text || "\u00A0"}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-2">
@@ -1519,9 +1616,21 @@ function RunHistoryPanel() {
         <span className="text-[10px] text-cyber-muted font-medium">
           실행 기록 <span className="text-cyber-subtle">({total})</span>
         </span>
-        <button onClick={fetchRuns} disabled={loading} className="text-cyber-subtle hover:text-cyber-muted transition-colors disabled:opacity-40">
-          <RefreshCw size={9} className={loading ? "animate-spin" : ""} />
-        </button>
+        <div className="flex items-center gap-2">
+          {compareIds.size === 2 && (
+            <button onClick={handleCompare} disabled={diffLoading}
+              className="text-[9px] font-bold px-2 py-0.5 rounded transition-all"
+              style={{ background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.4)", color: "#a855f7" }}>
+              {diffLoading ? "로딩..." : "Compare"}
+            </button>
+          )}
+          {compareIds.size > 0 && compareIds.size < 2 && (
+            <span className="text-[8px] text-cyber-subtle">1개 더 선택하세요</span>
+          )}
+          <button onClick={fetchRuns} disabled={loading} className="text-cyber-subtle hover:text-cyber-muted transition-colors disabled:opacity-40">
+            <RefreshCw size={9} className={loading ? "animate-spin" : ""} />
+          </button>
+        </div>
       </div>
 
       {runs.length === 0 ? (
@@ -1534,6 +1643,7 @@ function RunHistoryPanel() {
         <div className="flex flex-col gap-1">
           {runs.map((run) => {
             const isExpanded = expanded === run.id;
+            const isChecked = compareIds.has(run.id);
             const statusColor = STATUS_COLOR[run.status] ?? "#64748b";
             const date = new Date(run.created_at).toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
             return (
@@ -1541,12 +1651,24 @@ function RunHistoryPanel() {
                 <div
                   className="rounded-lg px-2.5 py-2 cursor-pointer transition-all"
                   style={{
-                    background: isExpanded ? "rgba(34,211,238,0.05)" : "rgba(11,16,37,0.4)",
-                    border: `1px solid ${isExpanded ? "rgba(34,211,238,0.2)" : "rgba(255,255,255,0.06)"}`,
+                    background: isChecked ? "rgba(168,85,247,0.08)" : isExpanded ? "rgba(34,211,238,0.05)" : "rgba(11,16,37,0.4)",
+                    border: `1px solid ${isChecked ? "rgba(168,85,247,0.3)" : isExpanded ? "rgba(34,211,238,0.2)" : "rgba(255,255,255,0.06)"}`,
                   }}
                   onClick={() => fetchDetail(run.id)}
                 >
                   <div className="flex items-center gap-1.5 mb-1">
+                    {/* Diff 체크박스 */}
+                    <button
+                      onClick={(e) => toggleCompare(run.id, e)}
+                      className="flex-shrink-0 w-3 h-3 rounded-sm border transition-all flex items-center justify-center"
+                      style={{
+                        borderColor: isChecked ? "#a855f7" : "rgba(255,255,255,0.15)",
+                        background: isChecked ? "rgba(168,85,247,0.3)" : "transparent",
+                      }}
+                      title="비교용 선택"
+                    >
+                      {isChecked && <span className="text-[7px] text-purple-400">✓</span>}
+                    </button>
                     {isExpanded
                       ? <ChevronDown size={9} className="text-cyber-muted flex-shrink-0" />
                       : <ChevronRight size={9} className="text-cyber-muted flex-shrink-0" />
@@ -1584,6 +1706,41 @@ function RunHistoryPanel() {
                         </div>
                       );
                     })}
+                    {/* Export 버튼 */}
+                    <div className="flex gap-1.5 mt-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const md = `# Run #${detail.id}\n\n**Prompt**: ${detail.prompt}\n**Provider**: ${detail.provider}\n**Tokens**: ${detail.total_tokens}\n**Time**: ${(detail.total_ms / 1000).toFixed(1)}s\n**Status**: ${detail.status}\n\n---\n\n${Object.entries(detail.agent_outputs ?? {}).map(([id, out]) => `## ${id}\n\n${out}`).join("\n\n---\n\n")}`;
+                          const blob = new Blob([md], { type: "text/markdown" });
+                          const a = document.createElement("a");
+                          a.href = URL.createObjectURL(blob);
+                          a.download = `run-${detail.id}.md`;
+                          a.click();
+                          URL.revokeObjectURL(a.href);
+                        }}
+                        className="text-[8px] px-2 py-0.5 rounded font-mono transition-all"
+                        style={{ background: "rgba(34,211,238,0.08)", border: "1px solid rgba(34,211,238,0.2)", color: "#22d3ee" }}
+                      >
+                        .md
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const data = JSON.stringify(detail, null, 2);
+                          const blob = new Blob([data], { type: "application/json" });
+                          const a = document.createElement("a");
+                          a.href = URL.createObjectURL(blob);
+                          a.download = `run-${detail.id}.json`;
+                          a.click();
+                          URL.revokeObjectURL(a.href);
+                        }}
+                        className="text-[8px] px-2 py-0.5 rounded font-mono transition-all"
+                        style={{ background: "rgba(168,85,247,0.08)", border: "1px solid rgba(168,85,247,0.2)", color: "#a855f7" }}
+                      >
+                        .json
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -2442,10 +2599,10 @@ function ProvidersPanel() {
   const { providerStatus, providerType, useRealModels } = usePipeline();
 
   const items = [
-    { key: "ollama",       label: "Ollama",          port: "11434", color: "#22d3ee" },
-    { key: "lmstudio",     label: "LM Studio",       port: "1234",  color: "#a855f7" },
-    { key: "llamacpp",     label: "llama-cpp-python", port: "8080",  color: "#f59e0b" },
-    { key: "transformers", label: "HF Transformers",  port: "—",     color: "#10b981" },
+    { key: "ollama", label: "Ollama", port: "11434", color: "#22d3ee" },
+    { key: "lmstudio", label: "LM Studio", port: "1234", color: "#a855f7" },
+    { key: "llamacpp", label: "llama-cpp-python", port: "8080", color: "#f59e0b" },
+    { key: "transformers", label: "HF Transformers", port: "—", color: "#10b981" },
   ] as const;
 
   return (
@@ -2501,23 +2658,29 @@ export default function RightPanel() {
   type TabKey = "agents" | "output" | "metrics" | "providers" | "models" | "chat" | "history" | "rag" | "mcp" | "evals" | "a2a";
   type GroupKey = "pipeline" | "data" | "network";
   const TAB_GROUPS: Record<GroupKey, { label: string; color: string; tabs: { key: TabKey; label: string }[] }> = {
-    pipeline: { label: "Pipeline", color: "#22d3ee", tabs: [
-      { key: "agents",    label: "Agents" },
-      { key: "output",    label: "Output" },
-      { key: "metrics",   label: "Metrics" },
-      { key: "providers", label: "Providers" },
-    ]},
-    data: { label: "Data", color: "#a855f7", tabs: [
-      { key: "models",  label: "Models" },
-      { key: "rag",     label: "RAG" },
-      { key: "mcp",     label: "MCP" },
-      { key: "evals",   label: "Evals" },
-    ]},
-    network: { label: "Network", color: "#10b981", tabs: [
-      { key: "chat",    label: "Chat" },
-      { key: "history", label: "History" },
-      { key: "a2a",     label: "A2A" },
-    ]},
+    pipeline: {
+      label: "Pipeline", color: "#22d3ee", tabs: [
+        { key: "agents", label: "Agents" },
+        { key: "output", label: "Output" },
+        { key: "metrics", label: "Metrics" },
+        { key: "providers", label: "Providers" },
+      ]
+    },
+    data: {
+      label: "Data", color: "#a855f7", tabs: [
+        { key: "models", label: "Models" },
+        { key: "rag", label: "RAG" },
+        { key: "mcp", label: "MCP" },
+        { key: "evals", label: "Evals" },
+      ]
+    },
+    network: {
+      label: "Network", color: "#10b981", tabs: [
+        { key: "chat", label: "Chat" },
+        { key: "history", label: "History" },
+        { key: "a2a", label: "A2A" },
+      ]
+    },
   };
   const [activeTab, setActiveTab] = useState<TabKey>("agents");
   const [activeGroup, setActiveGroup] = useState<GroupKey>("pipeline");
@@ -2610,10 +2773,10 @@ export default function RightPanel() {
       {/* Summary cards */}
       <div className="grid grid-cols-2 gap-1.5 p-2.5 flex-shrink-0">
         {[
-          { label: "Tokens",      value: totalTokens > 0 ? totalTokens.toLocaleString() : "—", icon: MessageSquare, color: "#22d3ee" },
+          { label: "Tokens", value: totalTokens > 0 ? totalTokens.toLocaleString() : "—", icon: MessageSquare, color: "#22d3ee" },
           { label: "Avg Latency", value: avgLatency > 0 ? `${(avgLatency / 1000).toFixed(1)}s` : "—", icon: Clock, color: "#a855f7" },
-          { label: "VRAM",        value: totalVram > 0 ? `${totalVram.toFixed(1)} GB` : "—", icon: MemoryStick, color: "#f472b6" },
-          { label: "Active",      value: `${activeAgentCount} / ${registryAgents.length}`, icon: Activity, color: "#10b981" },
+          { label: "VRAM", value: totalVram > 0 ? `${totalVram.toFixed(1)} GB` : "—", icon: MemoryStick, color: "#f472b6" },
+          { label: "Active", value: `${activeAgentCount} / ${registryAgents.length}`, icon: Activity, color: "#10b981" },
         ].map(({ label, value, icon: Icon, color }) => (
           <div
             key={label}
@@ -2727,7 +2890,7 @@ export default function RightPanel() {
                   }}
                 >
                   <div className="flex gap-0.5">
-                    {[0,1,2].map((i) => (
+                    {[0, 1, 2].map((i) => (
                       <motion.div
                         key={i}
                         className="w-1 h-1 rounded-full bg-cyber-cyan"
@@ -2871,12 +3034,12 @@ export default function RightPanel() {
                   </div>
                   {[
                     { label: "Total Tokens", value: totalTokens.toLocaleString() },
-                    { label: "Total Time",   value: `${(totalMs / 1000).toFixed(1)}s` },
+                    { label: "Total Time", value: `${(totalMs / 1000).toFixed(1)}s` },
                     {
                       label: "Throughput",
                       value: totalMs > 0 ? `${(totalTokens / (totalMs / 1000)).toFixed(1)} T/s` : "—",
                     },
-                    { label: "Agents Run",   value: `${doneCount} / ${registryAgents.length}` },
+                    { label: "Agents Run", value: `${doneCount} / ${registryAgents.length}` },
                   ].map(({ label, value }) => (
                     <div
                       key={label}
@@ -2903,9 +3066,9 @@ export default function RightPanel() {
                 </div>
                 {[
                   { label: "CPU", value: "Ryzen 9 9900X", sub: "24-core" },
-                  { label: "RAM", value: "64.0 GB",       sub: "DDR5" },
-                  { label: "GPU", value: "RTX 5080",      sub: "16 GB GDDR7" },
-                  { label: "CUDA",value: "13.0",          sub: "Compute 12.0" },
+                  { label: "RAM", value: "64.0 GB", sub: "DDR5" },
+                  { label: "GPU", value: "RTX 5080", sub: "16 GB GDDR7" },
+                  { label: "CUDA", value: "13.0", sub: "Compute 12.0" },
                 ].map(({ label, value, sub }) => (
                   <div
                     key={label}

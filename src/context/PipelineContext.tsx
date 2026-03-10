@@ -107,6 +107,7 @@ type PipelineState = {
   retryInfo: RetryInfo | null;
   // Phase 13: 대화 세션
   sessionId: string | null;
+  imagePaths: string[];
   // Phase 19: 동적 모델 디스커버리
   modelMetadata: Record<string, ModelMeta[]>; // provider → 메타 배열
   newModelKeys: Set<string>;                  // "provider:model_id" 형식
@@ -121,6 +122,7 @@ type PipelineContextValue = PipelineState & {
   setNodeConfig: (nodeId: string, patch: Partial<NodeConfig>) => void;
   resetNodeConfig: (nodeId: string, agentType?: AgentType) => void;
   setSessionId: (id: string | null) => void;
+  setImagePaths: (paths: string[] | ((prev: string[]) => string[])) => void;
   refreshModels: () => Promise<void>;
   run: () => void;
   stop: () => void;
@@ -169,6 +171,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     orchestrationMode: "dag",
     retryInfo: null,
     sessionId: null,
+    imagePaths: [],
     modelMetadata: {},
     newModelKeys: new Set<string>(),
   });
@@ -346,6 +349,12 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   const setOrchestrationMode = useCallback((m: OrchestrationMode) => setState((s) => ({ ...s, orchestrationMode: m })), []);
   const setSelectedNode = useCallback((info: SelectedNodeInfo) => setState((s) => ({ ...s, selectedNode: info })), []);
   const setSessionId = useCallback((id: string | null) => setState((s) => ({ ...s, sessionId: id })), []);
+  const setImagePaths = useCallback((paths: string[] | ((prev: string[]) => string[])) => {
+    setState((s) => ({
+      ...s,
+      imagePaths: typeof paths === "function" ? paths(s.imagePaths) : paths,
+    }));
+  }, []);
 
   const setNodeConfig = useCallback((nodeId: string, patch: Partial<NodeConfig>) => {
     setState((s) => ({
@@ -430,6 +439,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           orchestration_mode: state.orchestrationMode,
           structured_routing: true,
           session_id: state.sessionId,
+          image_paths: state.imagePaths.length > 0 ? state.imagePaths : undefined,
         }),
         signal: abortRef.current.signal,
       });
@@ -463,7 +473,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.prompt, state.useRealModels, state.providerType, state.nodeConfigs, state.orchestrationMode, state.sessionId]);
+  }, [state.prompt, state.useRealModels, state.providerType, state.nodeConfigs, state.orchestrationMode, state.sessionId, state.imagePaths]);
 
   const handleEvent = useCallback((event: Record<string, unknown>) => {
     switch (event.type as string) {
@@ -634,9 +644,14 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     abortRef.current?.abort();
     readerRef.current?.cancel();
     setState((s) => ({
-      ...s, status: "idle",
+      ...s,
+      status: "idle",
       agentMetrics: defaultMetrics(),
-      totalTokens: 0, totalMs: 0, error: null,
+      totalTokens: 0,
+      totalMs: 0,
+      error: null,
+      retryInfo: null,
+      imagePaths: [],
     }));
   }, []);
 
@@ -646,6 +661,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         ...state,
         setPrompt, setUseRealModels, setProviderType, setOrchestrationMode,
         setSelectedNode, setNodeConfig, resetNodeConfig, setSessionId,
+        setImagePaths,
         refreshModels,
         run, stop, reset,
       }}

@@ -17,6 +17,8 @@ import {
   GitBranch,
   MessageSquare,
   X,
+  Paperclip,
+  Image as ImageIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePipeline, type ProviderType, type OrchestrationMode } from "@/context/PipelineContext";
@@ -34,14 +36,14 @@ const pipelineTemplates = [
 
 const PROVIDERS: { value: ProviderType; label: string; color: string }[] = [
   { value: "simulation", label: "Simulation", color: "#64748b" },
-  { value: "ollama",     label: "Ollama",     color: "#22d3ee" },
-  { value: "lmstudio",  label: "LM Studio",  color: "#a855f7" },
-  { value: "llamacpp",  label: "llama.cpp",  color: "#f59e0b" },
+  { value: "ollama", label: "Ollama", color: "#22d3ee" },
+  { value: "lmstudio", label: "LM Studio", color: "#a855f7" },
+  { value: "llamacpp", label: "llama.cpp", color: "#f59e0b" },
   { value: "transformers", label: "HF Transformers", color: "#10b981" },
 ];
 
 const ORCHESTRATION_MODES: { value: OrchestrationMode; label: string; description: string; color: string }[] = [
-  { value: "dag",       label: "DAG",       description: "Linear pipeline (no retry)",     color: "#64748b" },
+  { value: "dag", label: "DAG", description: "Linear pipeline (no retry)", color: "#64748b" },
   { value: "langgraph", label: "LangGraph", description: "Validator retry loop (max 3×)", color: "#a855f7" },
 ];
 
@@ -56,7 +58,33 @@ export default function TopBar() {
     orchestrationMode, setOrchestrationMode,
     retryInfo,
     sessionId, setSessionId,
+    imagePaths, setImagePaths,
   } = usePipeline();
+
+  const [uploadingImage, setUploadingImage] = useState(false);
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setUploadingImage(true);
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("http://localhost:8000/api/upload/image", {
+        method: "POST",
+        body: formData,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setImagePaths((prev) => [...prev, data.local_path]);
+      }
+    } catch (err) {
+      console.error("Failed to upload image", err);
+    } finally {
+      setUploadingImage(false);
+      e.target.value = "";
+    }
+  };
 
   const newSession = useCallback(() => {
     const id = crypto.randomUUID();
@@ -71,15 +99,15 @@ export default function TopBar() {
   const [showLoadModal, setShowLoadModal] = useState(false);
 
   const isRunning = status === "running";
-  const isDone    = status === "done";
+  const isDone = status === "done";
   const isStopped = status === "stopped";
 
   const currentProvider = PROVIDERS.find((p) => p.value === providerType) ?? PROVIDERS[0];
   const currentOrchestration = ORCHESTRATION_MODES.find((m) => m.value === orchestrationMode) ?? ORCHESTRATION_MODES[0];
   const isProviderOnline =
     providerType === "simulation" ? true :
-    providerType === "transformers" ? providerStatus.transformers :
-    providerStatus[providerType as keyof typeof providerStatus] ?? false;
+      providerType === "transformers" ? providerStatus.transformers :
+        providerStatus[providerType as keyof typeof providerStatus] ?? false;
 
   return (
     <motion.header
@@ -140,8 +168,40 @@ export default function TopBar() {
       {/* Divider */}
       <div className="w-px h-5 bg-white/[0.08] flex-shrink-0" />
 
-      {/* Prompt input */}
-      <div className="flex-1 relative min-w-0">
+      {/* Prompt input and Image Attachment */}
+      <div className="flex-1 relative min-w-0 flex items-center gap-2">
+        <input
+          type="file"
+          id="image-upload-input"
+          accept="image/*"
+          className="hidden"
+          onChange={handleImageUpload}
+          disabled={uploadingImage || isRunning}
+        />
+        <label
+          htmlFor="image-upload-input"
+          className={cn(
+            "flex-shrink-0 p-1.5 rounded-md cursor-pointer transition-colors",
+            "text-cyber-muted hover:text-cyber-cyan hover:bg-cyber-cyan/10",
+            (uploadingImage || isRunning) && "opacity-50 pointer-events-none"
+          )}
+          title="Attach Image for Vision Agent"
+        >
+          <Paperclip size={14} />
+        </label>
+
+        {imagePaths.length > 0 && (
+          <div className="flex items-center gap-1.5 shrink-0 px-2 py-1 bg-cyber-cyan/10 rounded-md border border-cyber-cyan/30">
+            <ImageIcon size={12} className="text-cyber-cyan" />
+            <span className="text-xs text-cyber-cyan font-mono">{imagePaths.length} img</span>
+            <button
+              onClick={() => setImagePaths([])}
+              className="ml-1 text-cyber-cyan hover:text-cyber-red transition-colors"
+            >
+              <X size={10} />
+            </button>
+          </div>
+        )}
         {editingPrompt ? (
           <div className="flex items-center gap-2">
             <input
@@ -225,8 +285,8 @@ export default function TopBar() {
                 {PROVIDERS.map((p) => {
                   const online =
                     p.value === "simulation" ? true :
-                    p.value === "transformers" ? providerStatus.transformers :
-                    providerStatus[p.value as keyof typeof providerStatus] ?? false;
+                      p.value === "transformers" ? providerStatus.transformers :
+                        providerStatus[p.value as keyof typeof providerStatus] ?? false;
 
                   return (
                     <button

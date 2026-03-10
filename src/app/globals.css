@@ -235,3 +235,14 @@ body {
   border-left: 2px solid #22d3ee;
   color: #22d3ee;
 }
+
+/* ─── Edge Particle Animation (Phase 18) ───────────────── */
+@keyframes edge-particle {
+  0%   { stroke-dashoffset: 24; }
+  100% { stroke-dashoffset: 0; }
+}
+
+.react-flow__edge-path {
+  stroke-dasharray: 6 3;
+  animation: edge-particle 0.8s linear infinite;
+}

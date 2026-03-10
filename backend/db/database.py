@@ -37,6 +37,7 @@ def init_db() -> None:
                 system_prompt   TEXT NOT NULL,
                 max_tokens      INTEGER DEFAULT 512,
                 temperature     REAL DEFAULT 0.7,
+                tools           TEXT DEFAULT '[]',
                 created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -87,6 +88,12 @@ def init_db() -> None:
                 "UPDATE agent_registry SET model_id=?, name=? WHERE id=? AND model_id != ?",
                 (new_model, new_name, agent_id, new_model),
             )
+
+        # Migration: agent_registry에 tools 컬럼 추가 (기존 DB 대응)
+        try:
+            conn.execute("ALTER TABLE agent_registry ADD COLUMN tools TEXT DEFAULT '[]'")
+        except Exception:
+            pass  # 이미 존재하는 경우 무시
 
         # ── Phase 13: 대화 히스토리 테이블 ────────────────────────────────────────
         conn.execute("""

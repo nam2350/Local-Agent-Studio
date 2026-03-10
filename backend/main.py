@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pipeline.models import RunRequest
 from pipeline.orchestrator import run_pipeline
 from providers.registry import registry, ModelWatcher
@@ -21,6 +22,10 @@ MODELS_DIR = Path(__file__).parent / "models"
 # Ensure SQLite tables exist and default agents are seeded on startup
 database.init_db()
 
+# 업로드 디렉토리 생성 및 마운트 (정적 파일 서빙용)
+UPLOADS_DIR = Path(__file__).parent / "uploads"
+UPLOADS_DIR.mkdir(exist_ok=True)
+
 
 # ─── Lifecycle (FastAPI lifespan — on_event deprecated 대체) ──────────────────
 
@@ -36,7 +41,8 @@ async def lifespan(app: FastAPI):
     _executor.shutdown(wait=True)
 
 
-app = FastAPI(title="Local Agent Studio API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Local Agent Studio", lifespan=lifespan)
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 # ─── CORS ─────────────────────────────────────────────────────────────────────
 _default_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
@@ -96,6 +102,7 @@ class AgentCreate(BaseModel):
     system_prompt: str
     max_tokens: int = 512
     temperature: float = 0.7
+    tools: str = "[]"
 
 
 class AgentUpdate(BaseModel):
@@ -106,6 +113,7 @@ class AgentUpdate(BaseModel):
     system_prompt: str
     max_tokens: int
     temperature: float
+    tools: str = "[]"
 
 
 @app.post("/api/registry/agents", status_code=201)
@@ -115,7 +123,7 @@ def create_agent_endpoint(body: AgentCreate):
         raise HTTPException(status_code=409, detail=f"Agent '{body.id}' already exists")
     crud.create_agent(
         body.id, body.name, body.role, body.provider_type,
-        body.model_id, body.system_prompt, body.max_tokens, body.temperature,
+        body.model_id, body.system_prompt, body.max_tokens, body.temperature, body.tools,
     )
     return {"ok": True, "id": body.id}
 
@@ -127,7 +135,7 @@ def update_agent_endpoint(agent_id: str, body: AgentUpdate):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
     crud.update_agent(
         agent_id, body.name, body.role, body.provider_type,
-        body.model_id, body.system_prompt, body.max_tokens, body.temperature,
+        body.model_id, body.system_prompt, body.max_tokens, body.temperature, body.tools,
     )
     return {"ok": True}
 
@@ -623,6 +631,24 @@ def rag_query(body: RagQueryRequest):
     chunks = retrieve(body.collection, body.query, top_k=body.top_k, min_score=body.min_score)
     return {"chunks": chunks, "count": len(chunks)}
 
+
+@app.post("/api/upload/image")
+async def upload_image(file: UploadFile):
+    """비전 멀티모달용 이미지 업로드 (10MB 제한 로직은 프론트/Nginx 위임이라 가정)"""
+    import shutil
+    import uuid
+    
+    # 확장자 추출
+    ext = file.filename.split('.')[-1] if '.' in file.filename else 'png'
+    # 고유 파일명 생성
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    file_path = UPLOADS_DIR / filename
+    
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    # /uploads/ 경로의 상대 경로 리턴 (프론트 통신 및 컨텍스트 주입용)
+    return {"url": f"/uploads/{filename}", "local_path": str(file_path)}
 
 @app.post("/api/rag/upload")
 async def rag_upload(

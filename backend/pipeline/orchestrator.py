@@ -45,6 +45,7 @@ def _get_agent(agent_id: str) -> dict:
         "role": agent_record.get("role", "assistant"),
         "max_tokens": agent_record.get("max_tokens", 512),
         "temperature": agent_record.get("temperature", 0.7),
+        "tools": json.loads(agent_record.get("tools", "[]")) if agent_record.get("tools") else [],
         "tokensPerSec": 35.0,
         "vramGb": 3.0,
         "warmupSec": 0.5,
@@ -301,6 +302,10 @@ def _resolve_system_prompt(agent: dict, request: RunRequest) -> str:
             if cfg.tools:
                 active_tools = cfg.tools
 
+    # Fallback: DB에 저장된 에이전트 tools 사용
+    if not active_tools and agent.get("tools"):
+        active_tools = agent["tools"]
+
     if active_tools:
         tool_lines = "\n".join(
             f"- {t}: {_TOOL_DESCRIPTIONS.get(t, '')}  Example: {_TOOL_SCHEMAS.get(t, '')}"
@@ -487,6 +492,12 @@ async def _run_single_agent(
         cfg = next((c for c in request.agent_configs if c.agent_id == agent_id), None)
         if cfg and cfg.tools:
             active_tools = cfg.tools
+
+    # Fallback: DB에 저장된 에이전트 tools 사용
+    if not active_tools:
+        agent_def = _get_agent(agent_id)
+        if agent_def.get("tools"):
+            active_tools = agent_def["tools"]
 
     if tool_matches and (provider or active_tools):
         allowed_tools = active_tools or ["web_search", "calculator", "read_file"]

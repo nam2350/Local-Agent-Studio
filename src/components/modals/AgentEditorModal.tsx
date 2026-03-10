@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Bot, X, Loader2, CheckCircle2, Trash2, ChevronDown } from "lucide-react";
+import { Bot, X, Loader2, CheckCircle2, Trash2, ChevronDown, Wrench } from "lucide-react";
 import { usePipeline } from "@/context/PipelineContext";
 import { BACKEND } from "@/lib/config";
 
@@ -15,10 +15,17 @@ export type AgentRecord = {
   system_prompt: string;
   max_tokens: number;
   temperature: number;
+  tools?: string;
 };
 
 const ROLES = ["router", "coder", "analyzer", "validator", "synthesizer", "vision", "assistant"];
 const PROVIDERS = ["transformers", "ollama", "lmstudio", "llamacpp", "simulation"];
+
+const AVAILABLE_TOOLS = [
+  { id: "web_search", label: "Web Search", desc: "DuckDuckGo 웹 검색" },
+  { id: "calculator", label: "Calculator", desc: "수학 계산기" },
+  { id: "read_file", label: "Read File", desc: "파일 읽기" },
+];
 
 const EMPTY_FORM: AgentRecord = {
   id: "",
@@ -29,6 +36,7 @@ const EMPTY_FORM: AgentRecord = {
   system_prompt: "",
   max_tokens: 512,
   temperature: 0.7,
+  tools: "[]",
 };
 
 interface Props {
@@ -83,6 +91,7 @@ export default function AgentEditorModal({ open, onClose, agent, onSaved }: Prop
           name: form.name, role: form.role, provider_type: form.provider_type,
           model_id: form.model_id, system_prompt: form.system_prompt,
           max_tokens: form.max_tokens, temperature: form.temperature,
+          tools: form.tools ?? "[]",
         }
         : form;
 
@@ -365,6 +374,53 @@ export default function AgentEditorModal({ open, onClose, agent, onSaved }: Prop
                       className="w-full h-2 rounded-lg appearance-none cursor-pointer"
                       style={{ accentColor: "#22d3ee", marginTop: "10px" }}
                     />
+                  </div>
+                </div>
+
+                {/* Tools Configuration */}
+                <div>
+                  <label className="text-[10px] text-cyber-muted uppercase tracking-wider mb-2 flex items-center gap-1.5 block">
+                    <Wrench size={10} /> Tools 권한
+                  </label>
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {AVAILABLE_TOOLS.map((tool) => {
+                      const currentTools: string[] = (() => {
+                        try { return JSON.parse(form.tools ?? "[]"); }
+                        catch { return []; }
+                      })();
+                      const isOn = currentTools.includes(tool.id);
+                      return (
+                        <button
+                          key={tool.id}
+                          type="button"
+                          onClick={() => {
+                            const next = isOn
+                              ? currentTools.filter((t: string) => t !== tool.id)
+                              : [...currentTools, tool.id];
+                            setForm((prev) => ({ ...prev, tools: JSON.stringify(next) }));
+                          }}
+                          className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left transition-all"
+                          style={{
+                            background: isOn ? "rgba(34,211,238,0.08)" : "rgba(11,16,37,0.4)",
+                            border: `1px solid ${isOn ? "rgba(34,211,238,0.25)" : "rgba(255,255,255,0.06)"}`,
+                          }}
+                        >
+                          <div
+                            className="w-3 h-3 rounded-sm border flex items-center justify-center flex-shrink-0 transition-all"
+                            style={{
+                              borderColor: isOn ? "#22d3ee" : "rgba(255,255,255,0.15)",
+                              background: isOn ? "rgba(34,211,238,0.3)" : "transparent",
+                            }}
+                          >
+                            {isOn && <span className="text-[7px] text-cyber-cyan">✓</span>}
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-cyber-text font-medium">{tool.label}</span>
+                            <span className="text-[8px] text-cyber-subtle ml-1.5">{tool.desc}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
