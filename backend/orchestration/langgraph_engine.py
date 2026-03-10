@@ -109,20 +109,20 @@ async def _run_parallel_into_queue(
 # ── 노드 함수 ──────────────────────────────────────────────────────────────────
 async def node_route(state: GraphState) -> dict:
     """Stage 1: router-1 실행 → target_agents 파싱."""
-    from pipeline.orchestrator import AGENTS_BY_ID  # lazy import
+    from pipeline.orchestrator import AGENTS_BY_ID, ROUTER_AGENT_ID, FALLBACK_STAGE2_AGENTS
     from orchestration.pydantic_router import extract_target_agents
 
     queue = state["event_queue"]
-    await _run_agent_into_queue(AGENTS_BY_ID["router-1"], state, queue)
+    await _run_agent_into_queue(AGENTS_BY_ID[ROUTER_AGENT_ID], state, queue)
 
-    router_output = state["previous_outputs"].get("router-1", "")
+    router_output = state["previous_outputs"].get(ROUTER_AGENT_ID, "")
     # Qwen3.5 Thinking Mode: <think>...</think> 태그 제거
     router_output_clean = re.sub(r"<think>.*?</think>", "", router_output, flags=re.DOTALL).strip()
     parsed = extract_target_agents(
         output=router_output_clean,
         structured_routing=getattr(state["request"], "structured_routing", True),
     )
-    stage_2 = parsed if parsed is not None else ["coder-1", "analyzer-1"]
+    stage_2 = parsed if parsed is not None else list(FALLBACK_STAGE2_AGENTS)
     logger.info("[LangGraph] node_route → stage_2_agents=%s", stage_2)
     return {"stage_2_agents": stage_2}
 
@@ -155,17 +155,19 @@ async def node_specialists(state: GraphState) -> dict:
 
 async def node_validate(state: GraphState) -> dict:
     """Stage 3: validator-1 실행 + PASS/FAIL 판정."""
-    from pipeline.orchestrator import AGENTS_BY_ID  # lazy import
+    from pipeline.orchestrator import AGENTS_BY_ID, VALIDATOR_AGENT_ID
 
     queue = state["event_queue"]
     retry_count = state.get("retry_count", 0)
 
-    # coder-1이 실행된 경우에만 validator 작동
-    if "coder-1" not in state.get("stage_2_agents", []):
-        logger.info("[LangGraph] node_validate: coder-1 absent, auto-PASS")
+    # coder 역할 에이전트가 실행된 경우에만 validator 작동
+    coder_agents = [aid for aid in state.get("stage_2_agents", [])
+                    if AGENTS_BY_ID.get(aid, {}).get("role") == "coder"]
+    if not coder_agents:
+        logger.info("[LangGraph] node_validate: no coder agents, auto-PASS")
         return {"validator_passed": True}
 
-    output = await _run_agent_into_queue(AGENTS_BY_ID["validator-1"], state, queue)
+    output = await _run_agent_into_queue(AGENTS_BY_ID[VALIDATOR_AGENT_ID], state, queue)
     passed = _validator_passed(output)
 
     if not passed and retry_count >= MAX_RETRIES:
@@ -175,14 +177,15 @@ async def node_validate(state: GraphState) -> dict:
     if not passed:
         await queue.put(_sse({
             "type": "langgraph_retry",
-            "agentId": "validator-1",
+            "agentId": VALIDATOR_AGENT_ID,
             "retryCount": retry_count + 1,
             "maxRetries": MAX_RETRIES,
             "reason": "VALIDATION: FAIL — re-routing to specialists",
         }))
         # 재시도를 위해 이전 출력 초기화
-        state["previous_outputs"].pop("validator-1", None)
-        state["previous_outputs"].pop("coder-1", None)
+        state["previous_outputs"].pop(VALIDATOR_AGENT_ID, None)
+        for caid in coder_agents:
+            state["previous_outputs"].pop(caid, None)
         logger.info(
             "[LangGraph] node_validate: FAIL (retry %d/%d)", retry_count + 1, MAX_RETRIES
         )
@@ -193,10 +196,10 @@ async def node_validate(state: GraphState) -> dict:
 
 
 async def node_synthesize(state: GraphState) -> dict:
-    """Stage 4: synthesizer-1 최종 통합."""
-    from pipeline.orchestrator import AGENTS_BY_ID  # lazy import
+    """Stage 4: synthesizer 최종 통합."""
+    from pipeline.orchestrator import AGENTS_BY_ID, SYNTHESIZER_AGENT_ID
 
-    await _run_agent_into_queue(AGENTS_BY_ID["synthesizer-1"], state, state["event_queue"])
+    await _run_agent_into_queue(AGENTS_BY_ID[SYNTHESIZER_AGENT_ID], state, state["event_queue"])
     return {}
 
 
@@ -246,6 +249,7 @@ async def run_langgraph_pipeline(
     LangGraph 노드(상태 반환) ↔ SSE AsyncGenerator(이벤트 스트리밍)의
     패러다임 간극을 asyncio.Queue를 이벤트 버스로 사용하여 해소.
     """
+    from pipeline.orchestrator import FALLBACK_STAGE2_AGENTS
     pipeline_start = time.time()
     queue: asyncio.Queue = asyncio.Queue()
     previous_outputs: dict = {}
@@ -256,7 +260,7 @@ async def run_langgraph_pipeline(
     initial_state: GraphState = {
         "prompt": prompt,
         "previous_outputs": previous_outputs,
-        "stage_2_agents": ["coder-1", "analyzer-1"],
+        "stage_2_agents": list(FALLBACK_STAGE2_AGENTS),
         "retry_count": 0,
         "validator_passed": False,
         "request": request,

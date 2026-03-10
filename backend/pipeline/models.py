@@ -16,6 +16,7 @@ class AgentRunConfig(BaseModel):
     temperature: float = 0.7
     tools: Optional[List[str]] = None       # e.g. ["web_search", "calculator"]
     rag_collections: Optional[List[str]] = None  # Phase 22: RAG 컬렉션 이름 목록
+    auto_execute: bool = False               # Phase 21: 코드 블록 자동 실행 (coder role)
 
 
 class RunRequest(BaseModel):
@@ -47,6 +48,10 @@ class PipelineEvent(BaseModel):
         "stage_parallel",
         "pipeline_done",
         "pipeline_error",
+        # Phase 21: 코드 샌드박스
+        "code_exec_start",
+        "code_exec_output",
+        "code_exec_done",
     ]
     agentId: Optional[str] = None
     label: Optional[str] = None
@@ -69,3 +74,12 @@ class PipelineEvent(BaseModel):
     # Stage info
     stageIndex: Optional[int] = None
     agentIds: Optional[List[str]] = None
+    # Phase 21: 코드 샌드박스 필드
+    language: Optional[str] = None
+    code: Optional[str] = None
+    stdout: Optional[str] = None
+    stderr: Optional[str] = None
+    exitCode: Optional[int] = None
+    durationMs: Optional[int] = None
+    blocked: Optional[bool] = None
+    timedOut: Optional[bool] = None

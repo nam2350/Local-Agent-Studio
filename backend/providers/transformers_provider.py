@@ -33,6 +33,7 @@ _tokenizer_cache: dict = {}
 _is_vl_cache: dict = {}  # model_id → bool (True: VL processor, False: text tokenizer)
 _last_used: dict = {}    # model_id → float (last used timestamp)
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="transformers")
+_load_lock = __import__("threading").Lock()  # 모델 로딩 동시 접근 방지
 
 
 # ── 컨텍스트 길이 조회 ─────────────────────────────────────────────────────────
@@ -178,7 +179,13 @@ class TransformersProvider(BaseProvider):
 
         VL 모델(vision_config 포함): AutoProcessor + AutoModelForImageTextToText
         텍스트 모델: AutoTokenizer + AutoModelForCausalLM
+
+        threading.Lock으로 동시 로딩 방지 (race condition in VRAM eviction).
         """
+        with _load_lock:
+            return self._load_model_inner()
+
+    def _load_model_inner(self):
         # 1. Update LRU if already cached
         if self._model_id in _model_cache:
             _last_used[self._model_id] = time.time()
@@ -187,10 +194,21 @@ class TransformersProvider(BaseProvider):
         # 2. VRAM Scheduling (OOM Prevention)
         # 임계값(기본 12GB)을 초과하고 캐시된 모델이 있으면 가장 오래전에 사용된 모델 언로드
         _vram_threshold = float(os.environ.get("VRAM_EVICT_THRESHOLD_GB", "12.0"))
-        while _vram_allocated_gb() > _vram_threshold and len(_model_cache) > 0:
+        _max_evictions  = int(os.environ.get("VRAM_MAX_EVICTIONS", "5"))
+        _eviction_count = 0
+        while _vram_allocated_gb() > _vram_threshold and _model_cache and _last_used and _eviction_count < _max_evictions:
             oldest_model = min(_last_used.keys(), key=lambda k: _last_used[k])
-            logger.info("[Transformers] VRAM > %.1fGB! Evicting oldest model: '%s'", _vram_threshold, oldest_model)
+            logger.info(
+                "[Transformers] VRAM > %.1fGB — evicting '%s' (%d/%d)",
+                _vram_threshold, oldest_model, _eviction_count + 1, _max_evictions,
+            )
             unload_model(oldest_model)
+            _eviction_count += 1
+        if _eviction_count >= _max_evictions and _vram_allocated_gb() > _vram_threshold:
+            logger.warning(
+                "[Transformers] Max evictions (%d) reached, VRAM still %.2f GB — proceeding anyway",
+                _max_evictions, _vram_allocated_gb(),
+            )
 
         load_path = self._resolve_load_path()
         is_vl = self._detect_vl(load_path)
@@ -295,8 +313,8 @@ class TransformersProvider(BaseProvider):
                     inputs = tokenizer(text=text, return_tensors="pt", truncation=True, max_length=ctx_len)
                     inputs = {k: v.to(model.device) for k, v in inputs.items()}
                     # VL Processor의 내부 tokenizer를 TextIteratorStreamer에 전달
-                    streamer_tok = tokenizer.tokenizer
-                    pad_id = tokenizer.tokenizer.eos_token_id
+                    streamer_tok = getattr(tokenizer, "tokenizer", tokenizer)
+                    pad_id = getattr(streamer_tok, "eos_token_id", None) or 0
                 else:
                     # 텍스트 모델: 기존 로직
                     if getattr(tokenizer, "chat_template", None):
@@ -377,8 +395,15 @@ class TransformersProvider(BaseProvider):
 
         _executor.submit(run_generation)
 
+        _gen_timeout = int(os.environ.get("GENERATION_TIMEOUT_SEC", "120"))
         while True:
-            token = await token_queue.get()
+            try:
+                token = await asyncio.wait_for(token_queue.get(), timeout=_gen_timeout)
+            except asyncio.TimeoutError:
+                raise RuntimeError(
+                    f"[Transformers] Token generation timed out after {_gen_timeout}s "
+                    f"(model: {self._model_id})"
+                )
             if token is None:
                 break
             if isinstance(token, tuple):

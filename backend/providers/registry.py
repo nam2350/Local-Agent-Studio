@@ -5,7 +5,7 @@ Phase 19: ModelMeta dataclass + ModelWatcher singleton for real-time model disco
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional
 
 import httpx
@@ -46,6 +46,7 @@ class ModelWatcher:
         self._queues: List[asyncio.Queue] = []         # SSE 클라이언트 큐 목록
         self._task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
+        self._http_client: Optional[httpx.AsyncClient] = None
 
     @classmethod
     def get_instance(cls) -> "ModelWatcher":
@@ -80,6 +81,9 @@ class ModelWatcher:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        if self._http_client:
+            await self._http_client.aclose()
+            self._http_client = None
 
     def get_current_models(self) -> Dict[str, List[dict]]:
         """현재 알려진 모델 목록 반환 (SSE 연결 직후 스냅샷 전송용)."""
@@ -98,51 +102,57 @@ class ModelWatcher:
                 logger.debug("ModelWatcher poll error: %s", e)
             await asyncio.sleep(self._interval)
 
+    async def _get_http_client(self) -> httpx.AsyncClient:
+        """재사용 가능한 httpx 클라이언트 반환 (매 폴링마다 새로 생성하지 않음)."""
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(timeout=3.0)
+        return self._http_client
+
     async def _poll_once(self) -> None:
         """Ollama /api/tags + LMStudio /v1/models 조회 후 diff 계산."""
         current: Dict[str, List[ModelMeta]] = {}
+        client = await self._get_http_client()
 
         # ── Ollama: /api/tags (메타데이터 풍부) ──────────────────────────────
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.get(f"{DEFAULT_URLS['ollama']}/api/tags")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    metas: List[ModelMeta] = []
-                    for m in data.get("models", []):
-                        details = m.get("details", {})
-                        metas.append(ModelMeta(
-                            model_id=m.get("name", m.get("model", "")),
-                            provider="ollama",
-                            size_bytes=m.get("size", 0),
-                            family=details.get("family", ""),
-                            parameter_size=details.get("parameter_size", ""),
-                            quantization=details.get("quantization_level", ""),
-                            format=details.get("format", "gguf"),
-                        ))
-                    current["ollama"] = metas
-                else:
-                    current["ollama"] = list(self._known.get("ollama", []))
+            resp = await client.get(f"{DEFAULT_URLS['ollama']}/api/tags")
+            if resp.status_code == 200:
+                data = resp.json()
+                metas: List[ModelMeta] = []
+                for m in data.get("models", []):
+                    details = m.get("details", {})
+                    metas.append(ModelMeta(
+                        model_id=m.get("name", m.get("model", "")),
+                        provider="ollama",
+                        size_bytes=m.get("size", 0),
+                        family=details.get("family", ""),
+                        parameter_size=details.get("parameter_size", ""),
+                        quantization=details.get("quantization_level", ""),
+                        format=details.get("format", "gguf"),
+                    ))
+                current["ollama"] = metas
+            else:
+                current["ollama"] = list(self._known.get("ollama", []))
         except Exception:
             # 연결 실패 시 기존 유지 — 일시적 다운으로 인한 model_removed 오발 방지
             current["ollama"] = list(self._known.get("ollama", []))
 
         # ── LMStudio: /v1/models (id만 제공) ─────────────────────────────────
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.get(f"{DEFAULT_URLS['lmstudio']}/v1/models")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    current["lmstudio"] = [
-                        ModelMeta(model_id=m["id"], provider="lmstudio")
-                        for m in data.get("data", [])
-                    ]
-                else:
-                    current["lmstudio"] = list(self._known.get("lmstudio", []))
+            resp = await client.get(f"{DEFAULT_URLS['lmstudio']}/v1/models")
+            if resp.status_code == 200:
+                data = resp.json()
+                current["lmstudio"] = [
+                    ModelMeta(model_id=m["id"], provider="lmstudio")
+                    for m in data.get("data", [])
+                ]
+            else:
+                current["lmstudio"] = list(self._known.get("lmstudio", []))
         except Exception:
             current["lmstudio"] = list(self._known.get("lmstudio", []))
 
-        # ── Diff 계산 + 이벤트 발행 ──────────────────────────────────────────
+        # ── Diff 계산 (lock 내부) + 이벤트 수집, broadcast는 lock 밖 ─────────
+        events_to_broadcast: list[dict] = []
         async with self._lock:
             for provider, metas in current.items():
                 prev_ids = {m.model_id for m in self._known.get(provider, [])}
@@ -150,7 +160,7 @@ class ModelWatcher:
 
                 for meta in metas:
                     if meta.model_id not in prev_ids:
-                        await self._broadcast({
+                        events_to_broadcast.append({
                             "type": "model_added",
                             "provider": provider,
                             "model_id": meta.model_id,
@@ -159,7 +169,7 @@ class ModelWatcher:
                         })
 
                 for model_id in prev_ids - curr_ids:
-                    await self._broadcast({
+                    events_to_broadcast.append({
                         "type": "model_removed",
                         "provider": provider,
                         "model_id": model_id,
@@ -167,6 +177,10 @@ class ModelWatcher:
                     })
 
             self._known = current
+
+        # lock 밖에서 broadcast — 다른 subscribe/unsubscribe가 블로킹되지 않음
+        for ev in events_to_broadcast:
+            await self._broadcast(ev)
 
     async def _broadcast(self, event: dict) -> None:
         """등록된 모든 큐에 이벤트 전송. 가득 찬 큐는 skip."""

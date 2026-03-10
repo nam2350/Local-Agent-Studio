@@ -255,6 +255,7 @@ function OutputPanel() {
   const currentMetrics = agentMetrics[activeAgent];
   const currentOutput = currentMetrics?.output ?? "";
   const toolCalls = currentMetrics?.toolCalls ?? [];
+  const codeExecs = currentMetrics?.codeExecs ?? [];
 
   return (
     <div className="flex flex-col gap-2">
@@ -300,6 +301,46 @@ function OutputPanel() {
           <p className="text-[9px] text-cyber-muted uppercase tracking-widest mb-1">Tool Calls</p>
           {toolCalls.map((tc, i) => (
             <ToolCallBadge key={i} tool={tc.tool} input={tc.input} output={tc.output} />
+          ))}
+        </div>
+      )}
+
+      {/* Code execution results (Phase 21) */}
+      {codeExecs.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[9px] text-cyber-muted uppercase tracking-widest">Code Execution</p>
+          {codeExecs.map((ex, i) => (
+            <div
+              key={i}
+              className="rounded-lg overflow-hidden"
+              style={{ border: `1px solid ${ex.exitCode === 0 && !ex.blocked ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}` }}
+            >
+              {/* header */}
+              <div
+                className="flex items-center justify-between px-2.5 py-1.5"
+                style={{ background: ex.exitCode === 0 && !ex.blocked ? "rgba(16,185,129,0.08)" : "rgba(239,68,68,0.08)" }}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[9px] font-mono font-bold uppercase" style={{ color: ex.exitCode === 0 && !ex.blocked ? "#10b981" : "#ef4444" }}>
+                    {ex.blocked ? "BLOCKED" : ex.timedOut ? "TIMEOUT" : ex.exitCode === 0 ? "SUCCESS" : "ERROR"}
+                  </span>
+                  <span className="text-[9px] text-cyber-subtle">{ex.language}</span>
+                </div>
+                <span className="text-[9px] font-mono text-cyber-subtle">{ex.durationMs}ms</span>
+              </div>
+              {/* stdout */}
+              {ex.stdout && (
+                <div className="px-2.5 py-1.5" style={{ background: "rgba(0,0,0,0.3)" }}>
+                  <p className="text-[9px] font-mono text-cyber-green whitespace-pre-wrap leading-relaxed">{ex.stdout.slice(0, 400)}</p>
+                </div>
+              )}
+              {/* stderr */}
+              {ex.stderr && (
+                <div className="px-2.5 py-1" style={{ background: "rgba(239,68,68,0.04)" }}>
+                  <p className="text-[9px] font-mono text-cyber-red whitespace-pre-wrap leading-relaxed">{ex.stderr.slice(0, 200)}</p>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -1020,6 +1061,167 @@ const STATUS_COLOR: Record<string, string> = {
 
 // ─── RAG Panel ────────────────────────────────────────────────────────────────
 
+// ─── MCP Panel ────────────────────────────────────────────────────────────────
+
+type McpServer = { id: string; name: string; transport: string; command?: string; url?: string; enabled: number };
+type McpTool = { name: string; description: string; server_id: string };
+
+function McpPanel() {
+  const [servers, setServers] = useState<McpServer[]>([]);
+  const [tools, setTools] = useState<McpTool[]>([]);
+  const [addOpen, setAddOpen] = useState(false);
+  const [form, setForm] = useState({ id: "", name: "", transport: "stdio", command: "", url: "" });
+  const [testing, setTesting] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<Record<string, { ok: boolean; tools?: { name: string }[]; error?: string }>>({});
+
+  const fetchServers = useCallback(async () => {
+    try {
+      const r = await fetch(`${BACKEND}/api/mcp/servers`);
+      const d = await r.json();
+      setServers(d.servers ?? []);
+    } catch {}
+  }, []);
+
+  const fetchTools = useCallback(async () => {
+    try {
+      const r = await fetch(`${BACKEND}/api/mcp/tools`);
+      const d = await r.json();
+      setTools(d.tools ?? []);
+    } catch {}
+  }, []);
+
+  useEffect(() => { fetchServers(); fetchTools(); }, [fetchServers, fetchTools]);
+
+  const handleAdd = async () => {
+    if (!form.id || !form.name) return;
+    await fetch(`${BACKEND}/api/mcp/servers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: form.id, name: form.name, transport: form.transport,
+        command: form.command || undefined, url: form.url || undefined,
+      }),
+    });
+    setAddOpen(false);
+    setForm({ id: "", name: "", transport: "stdio", command: "", url: "" });
+    fetchServers(); fetchTools();
+  };
+
+  const handleDelete = async (id: string) => {
+    await fetch(`${BACKEND}/api/mcp/servers/${id}`, { method: "DELETE" });
+    fetchServers(); fetchTools();
+  };
+
+  const handleTest = async (id: string) => {
+    setTesting(id);
+    const r = await fetch(`${BACKEND}/api/mcp/servers/${id}/test`, { method: "POST" });
+    const d = await r.json();
+    setTestResult((p) => ({ ...p, [id]: d }));
+    setTesting(null);
+    fetchTools();
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Tool list */}
+      <div className="rounded-lg p-2.5" style={{ background: "rgba(34,211,238,0.04)", border: "1px solid rgba(34,211,238,0.12)" }}>
+        <p className="text-[9px] text-cyber-cyan uppercase tracking-widest font-semibold mb-2">Available Tools ({tools.length})</p>
+        {tools.length === 0 ? (
+          <p className="text-[9px] text-cyber-subtle italic">No tools yet</p>
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {tools.map((t) => (
+              <span key={`${t.server_id}:${t.name}`} className="text-[9px] font-mono px-1.5 py-0.5 rounded" style={{ background: "rgba(34,211,238,0.08)", color: "#22d3ee", border: "1px solid rgba(34,211,238,0.2)" }}>
+                {t.name}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Server list */}
+      <div className="flex flex-col gap-1.5">
+        {servers.map((s) => {
+          const res = testResult[s.id];
+          return (
+            <div key={s.id} className="rounded-lg p-2.5" style={{ background: "rgba(11,16,37,0.6)", border: "1px solid rgba(255,255,255,0.06)" }}>
+              <div className="flex items-center justify-between mb-1">
+                <div>
+                  <p className="text-[10px] font-semibold text-cyber-text">{s.name}</p>
+                  <p className="text-[9px] text-cyber-subtle font-mono">{s.transport} · {s.command || s.url || "builtin"}</p>
+                </div>
+                <div className="flex gap-1">
+                  <button onClick={() => handleTest(s.id)} disabled={testing === s.id} className="text-[9px] px-1.5 py-0.5 rounded text-cyber-cyan hover:bg-cyber-cyan/10 transition-colors">
+                    {testing === s.id ? "…" : "Test"}
+                  </button>
+                  {s.id !== "duckduckgo-builtin" && (
+                    <button onClick={() => handleDelete(s.id)} className="p-0.5 rounded hover:bg-red-500/10">
+                      <Trash2 size={9} color="#ef4444" />
+                    </button>
+                  )}
+                </div>
+              </div>
+              {res && (
+                <p className="text-[9px] font-mono" style={{ color: res.ok ? "#10b981" : "#ef4444" }}>
+                  {res.ok ? `✓ ${res.tools?.length ?? 0} tools` : `✗ ${res.error}`}
+                </p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Add server */}
+      {addOpen ? (
+        <div className="rounded-lg p-2.5 flex flex-col gap-2" style={{ background: "rgba(34,211,238,0.04)", border: "1px solid rgba(34,211,238,0.2)" }}>
+          {[
+            { key: "id", label: "ID (unique)" },
+            { key: "name", label: "Display Name" },
+          ].map(({ key, label }) => (
+            <input key={key} placeholder={label} value={(form as Record<string, string>)[key]}
+              onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+              className="w-full text-[10px] font-mono px-2 py-1.5 rounded outline-none text-cyber-text placeholder-cyber-subtle"
+              style={{ background: "rgba(11,16,37,0.8)", border: "1px solid rgba(34,211,238,0.3)" }}
+            />
+          ))}
+          <div className="relative">
+            <select value={form.transport} onChange={(e) => setForm((f) => ({ ...f, transport: e.target.value }))}
+              className="w-full appearance-none text-[10px] font-mono px-2 py-1.5 rounded outline-none text-cyber-text"
+              style={{ background: "rgba(11,16,37,0.8)", border: "1px solid rgba(34,211,238,0.3)" }}>
+              <option value="stdio">stdio (local process)</option>
+              <option value="sse">SSE (HTTP remote)</option>
+            </select>
+            <ChevronDown size={10} className="absolute right-2 top-1/2 -translate-y-1/2 text-cyber-muted pointer-events-none" />
+          </div>
+          {form.transport === "stdio" ? (
+            <input placeholder='Command (e.g. npx -y @modelcontextprotocol/server-filesystem)'
+              value={form.command} onChange={(e) => setForm((f) => ({ ...f, command: e.target.value }))}
+              className="w-full text-[10px] font-mono px-2 py-1.5 rounded outline-none text-cyber-text placeholder-cyber-subtle"
+              style={{ background: "rgba(11,16,37,0.8)", border: "1px solid rgba(34,211,238,0.3)" }}
+            />
+          ) : (
+            <input placeholder='URL (e.g. http://localhost:3001/sse)'
+              value={form.url} onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
+              className="w-full text-[10px] font-mono px-2 py-1.5 rounded outline-none text-cyber-text placeholder-cyber-subtle"
+              style={{ background: "rgba(11,16,37,0.8)", border: "1px solid rgba(34,211,238,0.3)" }}
+            />
+          )}
+          <div className="flex gap-1.5">
+            <button onClick={handleAdd} className="flex-1 py-1 rounded text-[10px] font-medium text-cyber-cyan" style={{ background: "rgba(34,211,238,0.12)", border: "1px solid rgba(34,211,238,0.3)" }}>Add</button>
+            <button onClick={() => setAddOpen(false)} className="flex-1 py-1 rounded text-[10px] text-cyber-muted" style={{ border: "1px solid rgba(255,255,255,0.08)" }}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setAddOpen(true)} className="flex items-center justify-center gap-1.5 py-1.5 rounded text-[10px] text-cyber-muted hover:text-cyber-text transition-colors" style={{ border: "1px dashed rgba(255,255,255,0.12)" }}>
+          <Plus size={10} />
+          Add MCP Server
+        </button>
+      )}
+    </div>
+  );
+}
+
+
 type RagCollection = { name: string; count: number };
 type RagChunk = { text: string; source: string; score: number };
 
@@ -1583,6 +1785,657 @@ function ConversationPanel() {
 }
 
 
+// ─── A2A Protocol panel (Phase 24) ───────────────────────────────────────────
+
+type A2AAgent = { id: string; name: string; url: string; description: string; skills: string[]; enabled: number };
+type A2ATask = { id: string; sessionId: string; skillId: string; status: { state: string }; artifacts: { name: string; parts: { type: string; text?: string }[] }[] };
+
+function A2APanel() {
+  const [agents, setAgents] = useState<A2AAgent[]>([]);
+  const [newId, setNewId] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newUrl, setNewUrl] = useState("");
+  const [newDesc, setNewDesc] = useState("");
+  const [showAdd, setShowAdd] = useState(false);
+  const [testing, setTesting] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<Record<string, { ok: boolean; error?: string; name?: string; skills?: string[] }>>({});
+  const [sendTarget, setSendTarget] = useState<A2AAgent | null>(null);
+  const [sendPrompt, setSendPrompt] = useState("");
+  const [sending, setSending] = useState(false);
+  const [lastResult, setLastResult] = useState<string>("");
+  const abortRef = useRef<AbortController | null>(null);
+
+  const fetchAgents = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND}/api/a2a/agents`);
+      if (res.ok) { const d = await res.json(); setAgents(d.agents ?? []); }
+    } catch { /* offline */ }
+  }, []);
+
+  useEffect(() => { fetchAgents(); }, [fetchAgents]);
+
+  const handleCreate = async () => {
+    if (!newId.trim() || !newName.trim() || !newUrl.trim()) return;
+    try {
+      const res = await fetch(`${BACKEND}/api/a2a/agents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: newId, name: newName, url: newUrl, description: newDesc }),
+      });
+      if (res.ok) {
+        setNewId(""); setNewName(""); setNewUrl(""); setNewDesc(""); setShowAdd(false);
+        await fetchAgents();
+      }
+    } catch { /* offline */ }
+  };
+
+  const handleDelete = async (agentId: string) => {
+    if (!window.confirm(`에이전트 '${agentId}'를 삭제하시겠습니까?`)) return;
+    try {
+      await fetch(`${BACKEND}/api/a2a/agents/${agentId}`, { method: "DELETE" });
+      await fetchAgents();
+    } catch { /* offline */ }
+  };
+
+  const handleTest = async (agent: A2AAgent) => {
+    setTesting(agent.id);
+    try {
+      const res = await fetch(`${BACKEND}/api/a2a/agents/${agent.id}/test`, { method: "POST" });
+      if (res.ok) {
+        const d = await res.json();
+        setTestResult((prev) => ({ ...prev, [agent.id]: d }));
+      }
+    } catch (e) {
+      setTestResult((prev) => ({ ...prev, [agent.id]: { ok: false, error: String(e) } }));
+    } finally {
+      setTesting(null);
+    }
+  };
+
+  const handleSend = async () => {
+    if (!sendTarget || !sendPrompt.trim() || sending) return;
+    setSending(true);
+    setLastResult("");
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    try {
+      const res = await fetch(`${BACKEND}/api/a2a/agents/${sendTarget.id}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: sendPrompt }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok || !res.body) throw new Error("SSE 연결 실패");
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.artifacts?.length) {
+              const art = ev.artifacts[0];
+              const text = art.parts?.find((p: { type: string; text?: string }) => p.type === "text")?.text ?? "";
+              if (text) setLastResult(text);
+            }
+          } catch { /* parse error */ }
+        }
+      }
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name !== "AbortError") setLastResult(`Error: ${e.message}`);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const stateColor = (state: string) => {
+    if (state === "completed") return "#10b981";
+    if (state === "failed") return "#ef4444";
+    if (state === "working") return "#22d3ee";
+    return "#64748b";
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* 헤더 */}
+      <div className="rounded-xl p-3" style={{ background: "rgba(11,16,37,0.6)", border: "1px solid rgba(255,255,255,0.07)" }}>
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <span className="text-[10px] font-semibold text-cyber-muted uppercase tracking-wider">A2A External Agents</span>
+            <p className="text-[9px] text-cyber-muted mt-0.5">Agent-to-Agent Protocol (Google A2A)</p>
+          </div>
+          <button
+            onClick={() => setShowAdd(!showAdd)}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] transition-all"
+            style={{ background: "rgba(34,211,238,0.1)", color: "#22d3ee", border: "1px solid rgba(34,211,238,0.2)" }}
+          >
+            <Plus size={9} /> 등록
+          </button>
+        </div>
+
+        {/* 등록 폼 */}
+        {showAdd && (
+          <div className="flex flex-col gap-1.5 mb-3 p-2 rounded-lg" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+            <input value={newId} onChange={(e) => setNewId(e.target.value)} placeholder="ID (예: studio-2)"
+              className="w-full px-2 py-1 rounded text-[10px] bg-white/5 border border-white/10 text-cyber-text placeholder-cyber-muted focus:outline-none focus:border-cyber-cyan/40" />
+            <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="이름"
+              className="w-full px-2 py-1 rounded text-[10px] bg-white/5 border border-white/10 text-cyber-text placeholder-cyber-muted focus:outline-none focus:border-cyber-cyan/40" />
+            <input value={newUrl} onChange={(e) => setNewUrl(e.target.value)} placeholder="URL (예: http://localhost:8001)"
+              className="w-full px-2 py-1 rounded text-[10px] bg-white/5 border border-white/10 text-cyber-text placeholder-cyber-muted focus:outline-none focus:border-cyber-cyan/40" />
+            <input value={newDesc} onChange={(e) => setNewDesc(e.target.value)} placeholder="설명 (선택)"
+              className="w-full px-2 py-1 rounded text-[10px] bg-white/5 border border-white/10 text-cyber-text placeholder-cyber-muted focus:outline-none focus:border-cyber-cyan/40" />
+            <button onClick={handleCreate} disabled={!newId.trim() || !newName.trim() || !newUrl.trim()}
+              className="py-1 rounded text-[10px] font-medium transition-all disabled:opacity-40"
+              style={{ background: "rgba(34,211,238,0.1)", color: "#22d3ee", border: "1px solid rgba(34,211,238,0.2)" }}>
+              등록
+            </button>
+          </div>
+        )}
+
+        {/* 에이전트 목록 */}
+        {agents.length === 0 ? (
+          <p className="text-[10px] text-cyber-muted text-center py-2">등록된 외부 에이전트 없음</p>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            {agents.map((a) => {
+              const tr = testResult[a.id];
+              return (
+                <div
+                  key={a.id}
+                  className="rounded-lg px-2.5 py-2"
+                  style={{ background: sendTarget?.id === a.id ? "rgba(34,211,238,0.05)" : "rgba(255,255,255,0.03)", border: `1px solid ${sendTarget?.id === a.id ? "rgba(34,211,238,0.2)" : "rgba(255,255,255,0.05)"}` }}
+                >
+                  <div className="flex items-start justify-between gap-1">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] text-cyber-text font-medium truncate">{a.name}</p>
+                      <p className="text-[9px] text-cyber-muted font-mono truncate">{a.url}</p>
+                      {a.skills.length > 0 && (
+                        <div className="flex gap-1 mt-1 flex-wrap">
+                          {a.skills.map((s) => (
+                            <span key={s} className="text-[8px] px-1 rounded" style={{ background: "rgba(34,211,238,0.08)", color: "#22d3ee" }}>{s}</span>
+                          ))}
+                        </div>
+                      )}
+                      {tr && (
+                        <p className="text-[9px] mt-0.5" style={{ color: tr.ok ? "#10b981" : "#ef4444" }}>
+                          {tr.ok ? `✓ ${tr.name}` : `✗ ${tr.error?.slice(0, 50)}`}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button
+                        onClick={() => handleTest(a)}
+                        disabled={testing === a.id}
+                        className="px-1.5 py-0.5 rounded text-[9px] transition-all"
+                        style={{ background: "rgba(16,185,129,0.08)", color: "#10b981", border: "1px solid rgba(16,185,129,0.2)" }}
+                      >
+                        {testing === a.id ? "..." : "Test"}
+                      </button>
+                      <button
+                        onClick={() => setSendTarget(sendTarget?.id === a.id ? null : a)}
+                        className="px-1.5 py-0.5 rounded text-[9px] transition-all"
+                        style={{ background: "rgba(168,85,247,0.08)", color: "#a855f7", border: "1px solid rgba(168,85,247,0.2)" }}
+                      >
+                        Send
+                      </button>
+                      <button onClick={() => handleDelete(a.id)}>
+                        <X size={9} className="text-cyber-muted hover:text-red-400 transition-colors" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* 태스크 전송 */}
+      {sendTarget && (
+        <div className="rounded-xl p-3" style={{ background: "rgba(11,16,37,0.6)", border: "1px solid rgba(168,85,247,0.15)" }}>
+          <span className="text-[10px] font-semibold text-cyber-muted uppercase tracking-wider block mb-2">
+            Send to: <span style={{ color: "#a855f7" }}>{sendTarget.name}</span>
+          </span>
+          <textarea
+            value={sendPrompt}
+            onChange={(e) => setSendPrompt(e.target.value)}
+            placeholder="전송할 프롬프트..."
+            rows={2}
+            className="w-full px-2 py-1 rounded text-[10px] bg-white/5 border border-white/10 text-cyber-text placeholder-cyber-muted focus:outline-none focus:border-cyber-purple/40 resize-none mb-1.5"
+          />
+          <button
+            onClick={sending ? () => { abortRef.current?.abort(); setSending(false); } : handleSend}
+            disabled={!sendPrompt.trim()}
+            className="w-full py-1 rounded text-[10px] font-medium transition-all disabled:opacity-40"
+            style={{
+              background: sending ? "rgba(239,68,68,0.1)" : "rgba(168,85,247,0.1)",
+              color: sending ? "#ef4444" : "#a855f7",
+              border: `1px solid ${sending ? "rgba(239,68,68,0.2)" : "rgba(168,85,247,0.2)"}`,
+            }}
+          >
+            {sending ? "중단" : "전송"}
+          </button>
+
+          {lastResult && (
+            <div className="mt-2 p-2 rounded" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+              <p className="text-[9px] text-cyber-muted mb-1">Result:</p>
+              <p className="text-[10px] text-cyber-text whitespace-pre-wrap line-clamp-6">{lastResult}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 셀프 에이전트 카드 정보 */}
+      <div className="rounded-xl p-3" style={{ background: "rgba(11,16,37,0.6)", border: "1px solid rgba(255,255,255,0.07)" }}>
+        <span className="text-[10px] font-semibold text-cyber-muted uppercase tracking-wider block mb-1.5">This Agent</span>
+        <p className="text-[9px] text-cyber-muted">Card URL:</p>
+        <p className="text-[9px] text-cyber-cyan font-mono break-all">{BACKEND}/a2a/.well-known/agent.json</p>
+        <p className="text-[9px] text-cyber-muted mt-1.5">Task endpoint:</p>
+        <p className="text-[9px] text-cyber-cyan font-mono break-all">{BACKEND}/a2a/tasks/send</p>
+      </div>
+    </div>
+  );
+}
+
+
+// ─── Agent Evals panel (Phase 23) ────────────────────────────────────────────
+
+type EvalSet = { id: string; name: string; case_count: number; created_at: string };
+type EvalCase = { id: number; question: string; expected: string; metrics: string };
+type EvalScore = { agentId: string; metric: string; avgScore: number };
+type EvalResult = { id: number; run_label: string; provider: string; created_at: string; scores: { agent_id: string; metric: string; avg_score: number }[] };
+
+const DEFAULT_METRICS = ["answer_relevance", "completeness", "conciseness"];
+
+function EvalsPanel() {
+  const [sets, setSets] = useState<EvalSet[]>([]);
+  const [selectedSet, setSelectedSet] = useState<EvalSet | null>(null);
+  const [cases, setCases] = useState<EvalCase[]>([]);
+  const [results, setResults] = useState<EvalResult[]>([]);
+  const [newSetName, setNewSetName] = useState("");
+  const [newQuestion, setNewQuestion] = useState("");
+  const [newExpected, setNewExpected] = useState("");
+  const [newMetrics, setNewMetrics] = useState<string[]>(DEFAULT_METRICS);
+  const [runLabel, setRunLabel] = useState("");
+  const [running, setRunning] = useState(false);
+  const [runProgress, setRunProgress] = useState<{ caseIdx: number; total: number; scores: EvalScore[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showAddCase, setShowAddCase] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const fetchSets = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND}/api/evals/sets`);
+      if (res.ok) { const d = await res.json(); setSets(d.eval_sets ?? []); }
+    } catch { /* offline */ }
+  }, []);
+
+  const fetchCases = useCallback(async (setId: string) => {
+    try {
+      const res = await fetch(`${BACKEND}/api/evals/sets/${setId}/cases`);
+      if (res.ok) { const d = await res.json(); setCases(d.cases ?? []); }
+    } catch { /* offline */ }
+  }, []);
+
+  const fetchResults = useCallback(async (setId: string) => {
+    try {
+      const res = await fetch(`${BACKEND}/api/evals/results?eval_set_id=${setId}&limit=5`);
+      if (res.ok) { const d = await res.json(); setResults(d.results ?? []); }
+    } catch { /* offline */ }
+  }, []);
+
+  useEffect(() => { fetchSets(); }, [fetchSets]);
+
+  const selectSet = async (s: EvalSet) => {
+    setSelectedSet(s);
+    setRunProgress(null);
+    await Promise.all([fetchCases(s.id), fetchResults(s.id)]);
+  };
+
+  const handleCreateSet = async () => {
+    const name = newSetName.trim();
+    if (!name) return;
+    try {
+      const res = await fetch(`${BACKEND}/api/evals/sets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (res.ok) { setNewSetName(""); await fetchSets(); }
+    } catch { /* offline */ }
+  };
+
+  const handleAddCase = async () => {
+    if (!selectedSet || !newQuestion.trim()) return;
+    try {
+      const res = await fetch(`${BACKEND}/api/evals/sets/${selectedSet.id}/cases`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: newQuestion, expected: newExpected, metrics: newMetrics }),
+      });
+      if (res.ok) {
+        setNewQuestion(""); setNewExpected(""); setShowAddCase(false);
+        await fetchCases(selectedSet.id);
+        await fetchSets();
+      }
+    } catch { /* offline */ }
+  };
+
+  const handleDeleteCase = async (caseId: number) => {
+    try {
+      await fetch(`${BACKEND}/api/evals/cases/${caseId}`, { method: "DELETE" });
+      if (selectedSet) await fetchCases(selectedSet.id);
+    } catch { /* offline */ }
+  };
+
+  const handleRunEval = async () => {
+    if (!selectedSet || running) return;
+    setRunning(true);
+    setRunProgress({ caseIdx: 0, total: cases.length, scores: [] });
+    setError(null);
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    try {
+      const res = await fetch(`${BACKEND}/api/evals/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eval_set_id: selectedSet.id, run_label: runLabel, provider: "simulation" }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok || !res.body) throw new Error("SSE 연결 실패");
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      const scores: EvalScore[] = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.type === "eval_start") {
+              setRunProgress({ caseIdx: 0, total: ev.totalCases, scores: [] });
+            } else if (ev.type === "eval_case_start") {
+              setRunProgress((prev) => prev ? { ...prev, caseIdx: ev.caseIdx + 1 } : null);
+            } else if (ev.type === "eval_score") {
+              const existing = scores.findIndex(s => s.agentId === ev.agentId && s.metric === ev.metric);
+              if (existing >= 0) scores[existing].avgScore = ev.score;
+              else scores.push({ agentId: ev.agentId, metric: ev.metric, avgScore: ev.score });
+              setRunProgress((prev) => prev ? { ...prev, scores: [...scores] } : null);
+            } else if (ev.type === "eval_done" || ev.type === "eval_error") {
+              if (ev.type === "eval_error") setError(ev.message);
+              await fetchResults(selectedSet.id);
+              break;
+            }
+          } catch { /* parse error */ }
+        }
+      }
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name !== "AbortError") setError(String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const metricColor = (score: number) => {
+    if (score >= 7) return "#10b981";
+    if (score >= 5) return "#f59e0b";
+    return "#ef4444";
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* 평가 세트 목록 */}
+      <div className="rounded-xl p-3" style={{ background: "rgba(11,16,37,0.6)", border: "1px solid rgba(255,255,255,0.07)" }}>
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[10px] font-semibold text-cyber-muted uppercase tracking-wider">Eval Sets</span>
+        </div>
+        {sets.length === 0 ? (
+          <p className="text-[10px] text-cyber-muted text-center py-2">세트 없음</p>
+        ) : (
+          <div className="flex flex-col gap-1 mb-2">
+            {sets.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => selectSet(s)}
+                className="flex items-center justify-between px-2 py-1.5 rounded-lg text-left transition-all"
+                style={{
+                  background: selectedSet?.id === s.id ? "rgba(34,211,238,0.08)" : "rgba(255,255,255,0.03)",
+                  border: `1px solid ${selectedSet?.id === s.id ? "rgba(34,211,238,0.2)" : "rgba(255,255,255,0.05)"}`,
+                }}
+              >
+                <div>
+                  <p className="text-[11px] text-cyber-text font-medium">{s.name}</p>
+                  <p className="text-[9px] text-cyber-muted">{s.case_count} cases</p>
+                </div>
+                <ChevronRight size={10} className="text-cyber-muted" />
+              </button>
+            ))}
+          </div>
+        )}
+        {/* 새 세트 생성 */}
+        <div className="flex gap-1">
+          <input
+            value={newSetName}
+            onChange={(e) => setNewSetName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleCreateSet()}
+            placeholder="새 세트 이름..."
+            className="flex-1 px-2 py-1 rounded text-[10px] bg-white/5 border border-white/10 text-cyber-text placeholder-cyber-muted focus:outline-none focus:border-cyber-cyan/40"
+          />
+          <button
+            onClick={handleCreateSet}
+            className="px-2 py-1 rounded text-[10px] font-medium transition-all"
+            style={{ background: "rgba(34,211,238,0.1)", color: "#22d3ee", border: "1px solid rgba(34,211,238,0.2)" }}
+          >
+            <Plus size={10} />
+          </button>
+        </div>
+      </div>
+
+      {/* 선택된 세트 상세 */}
+      {selectedSet && (
+        <>
+          {/* 케이스 목록 */}
+          <div className="rounded-xl p-3" style={{ background: "rgba(11,16,37,0.6)", border: "1px solid rgba(255,255,255,0.07)" }}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-semibold text-cyber-muted uppercase tracking-wider">
+                {selectedSet.name} — Cases
+              </span>
+              <button
+                onClick={() => setShowAddCase(!showAddCase)}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] transition-all"
+                style={{ background: "rgba(168,85,247,0.1)", color: "#a855f7", border: "1px solid rgba(168,85,247,0.2)" }}
+              >
+                <Plus size={9} /> Add
+              </button>
+            </div>
+
+            {cases.length === 0 ? (
+              <p className="text-[10px] text-cyber-muted text-center py-1">케이스 없음</p>
+            ) : (
+              <div className="flex flex-col gap-1 max-h-32 overflow-y-auto">
+                {cases.map((c) => (
+                  <div
+                    key={c.id}
+                    className="flex items-start gap-1.5 px-2 py-1.5 rounded"
+                    style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.05)" }}
+                  >
+                    <p className="flex-1 text-[10px] text-cyber-text line-clamp-2">{c.question}</p>
+                    <button
+                      onClick={() => handleDeleteCase(c.id)}
+                      className="opacity-50 hover:opacity-100 transition-opacity flex-shrink-0"
+                    >
+                      <X size={9} className="text-cyber-muted" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* 케이스 추가 폼 */}
+            {showAddCase && (
+              <div className="mt-2 flex flex-col gap-1.5">
+                <textarea
+                  value={newQuestion}
+                  onChange={(e) => setNewQuestion(e.target.value)}
+                  placeholder="질문 입력..."
+                  rows={2}
+                  className="w-full px-2 py-1 rounded text-[10px] bg-white/5 border border-white/10 text-cyber-text placeholder-cyber-muted focus:outline-none focus:border-cyber-cyan/40 resize-none"
+                />
+                <input
+                  value={newExpected}
+                  onChange={(e) => setNewExpected(e.target.value)}
+                  placeholder="기대 답변 (선택)..."
+                  className="w-full px-2 py-1 rounded text-[10px] bg-white/5 border border-white/10 text-cyber-text placeholder-cyber-muted focus:outline-none focus:border-cyber-cyan/40"
+                />
+                <div className="flex gap-1 flex-wrap">
+                  {DEFAULT_METRICS.map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setNewMetrics((prev) => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m])}
+                      className="px-1.5 py-0.5 rounded text-[9px] transition-all"
+                      style={{
+                        background: newMetrics.includes(m) ? "rgba(34,211,238,0.1)" : "rgba(255,255,255,0.04)",
+                        color: newMetrics.includes(m) ? "#22d3ee" : "#64748b",
+                        border: `1px solid ${newMetrics.includes(m) ? "rgba(34,211,238,0.2)" : "rgba(255,255,255,0.06)"}`,
+                      }}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={handleAddCase}
+                  disabled={!newQuestion.trim()}
+                  className="py-1 rounded text-[10px] font-medium transition-all disabled:opacity-40"
+                  style={{ background: "rgba(168,85,247,0.15)", color: "#a855f7", border: "1px solid rgba(168,85,247,0.25)" }}
+                >
+                  케이스 추가
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* 실행 패널 */}
+          <div className="rounded-xl p-3" style={{ background: "rgba(11,16,37,0.6)", border: "1px solid rgba(255,255,255,0.07)" }}>
+            <span className="text-[10px] font-semibold text-cyber-muted uppercase tracking-wider block mb-2">Run Eval</span>
+            <div className="flex gap-1 mb-2">
+              <input
+                value={runLabel}
+                onChange={(e) => setRunLabel(e.target.value)}
+                placeholder="실행 라벨 (선택)..."
+                className="flex-1 px-2 py-1 rounded text-[10px] bg-white/5 border border-white/10 text-cyber-text placeholder-cyber-muted focus:outline-none focus:border-cyber-cyan/40"
+              />
+              <button
+                onClick={running ? () => { abortRef.current?.abort(); setRunning(false); } : handleRunEval}
+                disabled={cases.length === 0}
+                className="px-3 py-1 rounded text-[10px] font-medium transition-all disabled:opacity-40"
+                style={{
+                  background: running ? "rgba(239,68,68,0.1)" : "rgba(16,185,129,0.1)",
+                  color: running ? "#ef4444" : "#10b981",
+                  border: `1px solid ${running ? "rgba(239,68,68,0.2)" : "rgba(16,185,129,0.2)"}`,
+                }}
+              >
+                {running ? "중단" : "실행"}
+              </button>
+            </div>
+
+            {/* 진행률 */}
+            {runProgress && (
+              <div className="mb-2">
+                <div className="flex justify-between text-[9px] text-cyber-muted mb-1">
+                  <span>Case {runProgress.caseIdx} / {runProgress.total}</span>
+                  <span>{Math.round(runProgress.caseIdx / Math.max(runProgress.total, 1) * 100)}%</span>
+                </div>
+                <div className="h-1 rounded-full bg-white/5 overflow-hidden">
+                  <motion.div
+                    className="h-full rounded-full"
+                    style={{ background: "#10b981" }}
+                    animate={{ width: `${runProgress.caseIdx / Math.max(runProgress.total, 1) * 100}%` }}
+                    transition={{ duration: 0.3 }}
+                  />
+                </div>
+                {runProgress.scores.length > 0 && (
+                  <div className="mt-2 flex flex-col gap-1">
+                    {runProgress.scores.slice(-4).map((s, i) => (
+                      <div key={i} className="flex items-center gap-1.5">
+                        <span className="text-[9px] text-cyber-muted flex-1 truncate">{s.metric}</span>
+                        <div className="w-16 h-1 rounded-full bg-white/5 overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all"
+                            style={{ width: `${s.avgScore * 10}%`, background: metricColor(s.avgScore) }}
+                          />
+                        </div>
+                        <span className="text-[9px] font-mono" style={{ color: metricColor(s.avgScore) }}>
+                          {s.avgScore.toFixed(1)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {error && (
+              <p className="text-[9px] text-red-400 bg-red-400/10 rounded px-2 py-1">{error}</p>
+            )}
+          </div>
+
+          {/* 결과 히스토리 */}
+          {results.length > 0 && (
+            <div className="rounded-xl p-3" style={{ background: "rgba(11,16,37,0.6)", border: "1px solid rgba(255,255,255,0.07)" }}>
+              <span className="text-[10px] font-semibold text-cyber-muted uppercase tracking-wider block mb-2">Results</span>
+              <div className="flex flex-col gap-2">
+                {results.map((r) => (
+                  <div
+                    key={r.id}
+                    className="rounded-lg px-2.5 py-2"
+                    style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.05)" }}
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] text-cyber-text font-medium">
+                        {r.run_label || `Run #${r.id}`}
+                      </span>
+                      <span className="text-[9px] text-cyber-muted font-mono">{r.provider}</span>
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      {r.scores.slice(0, 3).map((s, i) => (
+                        <div key={i} className="flex items-center gap-1.5">
+                          <span className="text-[9px] text-cyber-muted w-24 truncate">{s.metric}</span>
+                          <div className="flex-1 h-1 rounded-full bg-white/5 overflow-hidden">
+                            <div
+                              className="h-full rounded-full"
+                              style={{ width: `${s.avg_score * 10}%`, background: metricColor(s.avg_score) }}
+                            />
+                          </div>
+                          <span className="text-[9px] font-mono" style={{ color: metricColor(s.avg_score) }}>
+                            {s.avg_score.toFixed(1)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+
 // ─── Provider health panel ────────────────────────────────────────────────────
 
 function ProvidersPanel() {
@@ -1645,7 +2498,35 @@ function ProvidersPanel() {
 export default function RightPanel() {
   const { agentMetrics, totalTokens, totalMs, status, selectedNode, activeParallelStage } = usePipeline();
   const [uptime, setUptime] = useState(0);
-  const [activeTab, setActiveTab] = useState<"agents" | "output" | "metrics" | "providers" | "models" | "chat" | "history" | "rag">("agents");
+  type TabKey = "agents" | "output" | "metrics" | "providers" | "models" | "chat" | "history" | "rag" | "mcp" | "evals" | "a2a";
+  type GroupKey = "pipeline" | "data" | "network";
+  const TAB_GROUPS: Record<GroupKey, { label: string; color: string; tabs: { key: TabKey; label: string }[] }> = {
+    pipeline: { label: "Pipeline", color: "#22d3ee", tabs: [
+      { key: "agents",    label: "Agents" },
+      { key: "output",    label: "Output" },
+      { key: "metrics",   label: "Metrics" },
+      { key: "providers", label: "Providers" },
+    ]},
+    data: { label: "Data", color: "#a855f7", tabs: [
+      { key: "models",  label: "Models" },
+      { key: "rag",     label: "RAG" },
+      { key: "mcp",     label: "MCP" },
+      { key: "evals",   label: "Evals" },
+    ]},
+    network: { label: "Network", color: "#10b981", tabs: [
+      { key: "chat",    label: "Chat" },
+      { key: "history", label: "History" },
+      { key: "a2a",     label: "A2A" },
+    ]},
+  };
+  const [activeTab, setActiveTab] = useState<TabKey>("agents");
+  const [activeGroup, setActiveGroup] = useState<GroupKey>("pipeline");
+  const switchTab = (key: TabKey) => {
+    setActiveTab(key);
+    for (const [g, { tabs }] of Object.entries(TAB_GROUPS) as [GroupKey, { label: string; color: string; tabs: { key: TabKey; label: string }[] }][]) {
+      if (tabs.some((t) => t.key === key)) { setActiveGroup(g); break; }
+    }
+  };
   const [registryAgents, setRegistryAgents] = useState<AgentRecord[]>([]);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentRecord | undefined>(undefined);
@@ -1786,21 +2667,30 @@ export default function RightPanel() {
         </div>
       </div>
 
-      {/* Tab switcher */}
+      {/* Tab group selector */}
+      <div className="flex px-2.5 pt-1 gap-1 flex-shrink-0">
+        {(Object.entries(TAB_GROUPS) as [GroupKey, { label: string; color: string; tabs: { key: TabKey; label: string }[] }][]).map(([gKey, { label, color }]) => (
+          <button
+            key={gKey}
+            onClick={() => { setActiveGroup(gKey); switchTab(TAB_GROUPS[gKey].tabs[0].key); }}
+            className="flex-1 py-0.5 rounded-t text-[9px] font-semibold tracking-wider uppercase transition-all duration-150"
+            style={{
+              color: activeGroup === gKey ? color : "#64748b",
+              borderBottom: `1px solid ${activeGroup === gKey ? color + "60" : "transparent"}`,
+              background: activeGroup === gKey ? color + "08" : "transparent",
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab switcher — 현재 그룹 탭만 표시 */}
       <div className="flex px-2.5 pb-1.5 gap-1 flex-shrink-0">
-        {([
-          { key: "agents",    label: "Agents" },
-          { key: "output",    label: "Output" },
-          { key: "metrics",   label: "Metrics" },
-          { key: "providers", label: "Prvdrs" },
-          { key: "models",    label: "Models" },
-          { key: "chat",      label: "Chat" },
-          { key: "history",   label: "History" },
-          { key: "rag",       label: "RAG" },
-        ] as const).map(({ key, label }) => (
+        {TAB_GROUPS[activeGroup].tabs.map(({ key, label }) => (
           <button
             key={key}
-            onClick={() => setActiveTab(key)}
+            onClick={() => switchTab(key)}
             className={cn(
               "flex-1 py-1 rounded text-[9px] font-medium transition-all duration-150",
               activeTab === key
@@ -2031,6 +2921,19 @@ export default function RightPanel() {
               </div>
             </motion.div>
           )}
+          {activeTab === "mcp" && (
+            <motion.div
+              key="mcp"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="flex flex-col gap-3"
+            >
+              <McpPanel />
+            </motion.div>
+          )}
+
           {activeTab === "rag" && (
             <motion.div
               key="rag"
@@ -2041,6 +2944,32 @@ export default function RightPanel() {
               className="flex flex-col gap-3"
             >
               <RagPanel />
+            </motion.div>
+          )}
+
+          {activeTab === "evals" && (
+            <motion.div
+              key="evals"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="flex flex-col gap-3"
+            >
+              <EvalsPanel />
+            </motion.div>
+          )}
+
+          {activeTab === "a2a" && (
+            <motion.div
+              key="a2a"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="flex flex-col gap-3"
+            >
+              <A2APanel />
             </motion.div>
           )}
         </AnimatePresence>

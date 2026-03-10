@@ -66,11 +66,17 @@ AGENTS_BY_ID = _AgentsByIdDict()
 # The pipeline is now dynamic. The hardcoded PIPELINE_STAGES logic below
 # is retained only as a fallback, but the run_pipeline loop builds it dynamically.
 
+# ─── 파이프라인 에이전트 ID 상수 ─────────────────────────────────────────────
+ROUTER_AGENT_ID      = "router-1"
+VALIDATOR_AGENT_ID   = "validator-1"
+SYNTHESIZER_AGENT_ID = "synthesizer-1"
+FALLBACK_STAGE2_AGENTS: list[str] = ["coder-1", "analyzer-1"]
+
 FALLBACK_STAGES: list[list[str]] = [
-    ["router-1"],
-    ["coder-1", "analyzer-1"],
-    ["validator-1"],
-    ["synthesizer-1"],
+    [ROUTER_AGENT_ID],
+    FALLBACK_STAGE2_AGENTS,
+    [VALIDATOR_AGENT_ID],
+    [SYNTHESIZER_AGENT_ID],
 ]
 
 # ─── Role-based simulation outputs ───────────────────────────────────────────
@@ -505,12 +511,24 @@ async def _run_single_agent(
                 "input": tool_args,
             })
 
-            # Execute the tool
-            if tool_name == "web_search":
-                tool_result = web_search(tool_args.get("query", ""))
-            else:
-                from tools.executor import execute_tool
-                tool_result = execute_tool(tool_name, tool_args)
+            # Execute the tool — Phase 20: MCP 우선, fallback → 내장 실행기
+            try:
+                from mcp.registry import call_mcp_tool
+                mcp_result = await call_mcp_tool(tool_name, tool_args)
+                tool_result = mcp_result.content
+                if mcp_result.is_error:
+                    logger.warning("[%s] MCP tool '%s' returned error: %s", agent_id, tool_name, tool_result)
+            except Exception as _mcp_e:
+                logger.warning("[%s] MCP dispatch failed (%s), using builtin executor", agent_id, _mcp_e)
+                try:
+                    if tool_name == "web_search":
+                        tool_result = web_search(tool_args.get("query", ""))
+                    else:
+                        from tools.executor import execute_tool
+                        tool_result = execute_tool(tool_name, tool_args)
+                except Exception as _builtin_e:
+                    tool_result = f"[Tool execution failed: {_builtin_e}]"
+                    logger.error("[%s] Builtin tool '%s' also failed: %s", agent_id, tool_name, _builtin_e)
 
             yield sse({
                 "type": "tool_result",
@@ -543,7 +561,7 @@ async def _run_single_agent(
             try:
                 async for token_text in provider.generate(
                     prompt=tool_prompt,
-                    system_prompt=agent.get("system_prompt", ""),
+                    system_prompt=_resolve_system_prompt(agent, request),
                     max_tokens=_resolve_max_tokens(agent, request),
                     temperature=_resolve_temperature(agent, request),
                 ):
@@ -555,6 +573,35 @@ async def _run_single_agent(
                 full_output += "\n\n[Tool Results Applied]\n" + added_output
             except Exception as e:
                 logger.warning(f"[{agent_id}] Re-prompting after tool calls failed: {e}")
+
+    # Phase 21: 코드 자동 실행 (auto_execute 활성화된 에이전트만)
+    auto_execute = False
+    if request.agent_configs:
+        _cfg = next((c for c in request.agent_configs if c.agent_id == agent_id), None)
+        if _cfg:
+            auto_execute = getattr(_cfg, "auto_execute", False)
+
+    if auto_execute:
+        try:
+            from sandbox.executor import run_code_blocks_sse
+            exec_results_context = ""
+            async for exec_event in run_code_blocks_sse(agent_id, full_output):
+                yield sse(exec_event)
+                # 실행 결과를 컨텍스트로 수집 (Validator에 전달)
+                if exec_event.get("type") == "code_exec_output":
+                    stdout = exec_event.get("stdout", "")
+                    stderr = exec_event.get("stderr", "")
+                    if stdout:
+                        exec_results_context += f"\n[EXECUTION OUTPUT]\n{stdout[:600]}"
+                    if stderr:
+                        exec_results_context += f"\n[EXECUTION ERROR]\n{stderr[:300]}"
+                elif exec_event.get("type") == "code_exec_done":
+                    exit_code = exec_event.get("exitCode", 0)
+                    exec_results_context += f"\n[EXIT CODE] {exit_code}"
+            if exec_results_context:
+                full_output += exec_results_context
+        except Exception as _exec_err:
+            logger.warning("[%s] Code execution failed: %s", agent_id, _exec_err)
 
     # Store output BEFORE yielding agent_done
     previous_outputs[agent_id] = full_output
@@ -663,7 +710,7 @@ async def run_pipeline(
                 for t in turns[-3:]:  # 최근 3턴만
                     outputs = _crud.list_agent_outputs(t["id"])
                     synth = next((o for o in outputs if o["role"] == "synthesizer"), None)
-                    summary = synth["full_output"][:400] if synth else ""
+                    summary = synth.get("full_output", "")[:400] if synth else ""
                     history_parts.append(
                         f"Turn {t['turn_index'] + 1}: User asked: {t['user_prompt'][:100]}"
                         + (f"\nSummary: {summary}" if summary else "")
@@ -711,17 +758,22 @@ async def run_pipeline(
         structured_routing=getattr(request, "structured_routing", True),
     )
     if parsed_agents is None:
-        stage_2_agents = ["coder-1", "analyzer-1"]  # Stage 3: fallback
+        stage_2_agents = list(FALLBACK_STAGE2_AGENTS)  # 라우팅 실패 시 기본값
     else:
-        stage_2_agents = parsed_agents               # Stage 1 or 2 성공
+        stage_2_agents = parsed_agents                  # Stage 1 or 2 성공
 
     dynamic_stages = []
     if stage_2_agents:
         dynamic_stages.append(stage_2_agents)
-        if "coder-1" in stage_2_agents:
-            dynamic_stages.append(["validator-1"])
-            
-    dynamic_stages.append(["synthesizer-1"])
+        # coder 역할 에이전트가 있으면 validator 추가
+        coder_role_agents = [
+            aid for aid in stage_2_agents
+            if AGENTS_BY_ID[aid].get("role") == "coder"
+        ]
+        if coder_role_agents:
+            dynamic_stages.append([VALIDATOR_AGENT_ID])
+
+    dynamic_stages.append([SYNTHESIZER_AGENT_ID])
 
     # --- EXECUTE REMAINING STAGES ---
     for stage_ids in dynamic_stages:

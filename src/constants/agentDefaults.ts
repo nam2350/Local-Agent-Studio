@@ -14,6 +14,7 @@ export type NodeConfig = {
     web_search?: boolean;
   };
   ragCollections?: string[];  // Phase 22: RAG 컬렉션 이름 목록
+  autoExecute?: boolean;      // Phase 21: 코드 블록 자동 실행
 };
 
 // ─── Per-agentType defaults ───────────────────────────────────────────────────

@@ -530,6 +530,43 @@ export default function NodeConfigPanel() {
               </div>
             </div>
 
+            {/* ── Auto-Execute Code (Phase 21, coder role만) ────────── */}
+            {(agentType === "coder" || agentType === "custom") && (
+              <div
+                className="flex items-center justify-between p-2.5 rounded-lg transition-colors cursor-pointer"
+                style={{
+                  background: config.autoExecute ? "rgba(168, 85, 247, 0.08)" : "rgba(255, 255, 255, 0.02)",
+                  border: config.autoExecute ? "1px solid rgba(168, 85, 247, 0.3)" : "1px solid rgba(255, 255, 255, 0.06)",
+                }}
+                onClick={() => patch({ autoExecute: !config.autoExecute })}
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className={cn(
+                    "p-1.5 rounded-md transition-colors",
+                    config.autoExecute ? "bg-cyber-purple/20 text-cyber-purple" : "bg-white/5 text-cyber-muted"
+                  )}>
+                    <Cpu size={14} />
+                  </div>
+                  <div className="flex flex-col">
+                    <span className={cn("text-xs font-semibold", config.autoExecute ? "text-cyber-purple" : "text-cyber-text")}>
+                      Auto-Execute Code
+                    </span>
+                    <span className="text-[9px] text-cyber-subtle">샌드박스 실행 후 결과를 Validator에 전달</span>
+                  </div>
+                </div>
+                <div className={cn(
+                  "relative w-7 h-4 rounded-full transition-colors duration-200",
+                  config.autoExecute ? "bg-cyber-purple" : "bg-white/10"
+                )}>
+                  <motion.div
+                    initial={false}
+                    animate={{ x: config.autoExecute ? 12 : 2 }}
+                    className="absolute top-0.5 w-3 h-3 bg-white rounded-full shadow-sm"
+                  />
+                </div>
+              </div>
+            )}
+
             {/* ── RAG Collections (Phase 22) ────────────────────────── */}
             <RagCollectionsSection
               selected={config.ragCollections ?? []}

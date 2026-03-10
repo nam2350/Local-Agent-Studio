@@ -281,3 +281,60 @@ def list_agent_outputs(turn_id: int) -> list[dict]:
             "SELECT * FROM agent_outputs WHERE turn_id=? ORDER BY id ASC", (turn_id,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def list_turns_with_outputs(session_id: str) -> list[dict]:
+    """conversation_turns + agent_outputs를 단일 JOIN 쿼리로 조회 (N+1 방지)."""
+    from collections import OrderedDict
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                ct.id          AS turn_id,
+                ct.session_id,
+                ct.turn_index,
+                ct.user_prompt,
+                ct.orchestration_mode,
+                ct.created_at  AS turn_created_at,
+                ao.id          AS output_id,
+                ao.agent_id,
+                ao.role,
+                ao.full_output,
+                ao.token_count,
+                ao.latency_ms,
+                ao.vram_gb,
+                ao.created_at  AS output_created_at
+            FROM conversation_turns ct
+            LEFT JOIN agent_outputs ao ON ao.turn_id = ct.id
+            WHERE ct.session_id = ?
+            ORDER BY ct.turn_index ASC, ao.id ASC
+            """,
+            (session_id,),
+        ).fetchall()
+
+    turns: OrderedDict[int, dict] = OrderedDict()
+    for r in rows:
+        tid = r["turn_id"]
+        if tid not in turns:
+            turns[tid] = {
+                "id": tid,
+                "session_id": r["session_id"],
+                "turn_index": r["turn_index"],
+                "user_prompt": r["user_prompt"],
+                "orchestration_mode": r["orchestration_mode"],
+                "created_at": r["turn_created_at"],
+                "agent_outputs": [],
+            }
+        if r["output_id"] is not None:
+            turns[tid]["agent_outputs"].append({
+                "id": r["output_id"],
+                "turn_id": tid,
+                "agent_id": r["agent_id"],
+                "role": r["role"],
+                "full_output": r["full_output"],
+                "token_count": r["token_count"],
+                "latency_ms": r["latency_ms"],
+                "vram_gb": r["vram_gb"],
+                "created_at": r["output_created_at"],
+            })
+    return list(turns.values())

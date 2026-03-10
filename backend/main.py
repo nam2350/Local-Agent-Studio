@@ -8,7 +8,7 @@ from providers.registry import registry, ModelWatcher
 from db import crud, database
 from config import MODEL_REGISTRY, get_model_info
 from pydantic import BaseModel
-from typing import Any
+from typing import Any, Optional
 from pathlib import Path
 import asyncio
 import json
@@ -33,7 +33,7 @@ async def lifespan(app: FastAPI):
     # shutdown
     await ModelWatcher.get_instance().stop()
     from providers.transformers_provider import _executor
-    _executor.shutdown(wait=False)
+    _executor.shutdown(wait=True)
 
 
 app = FastAPI(title="Local Agent Studio API", version="0.2.0", lifespan=lifespan)
@@ -47,8 +47,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Accept", "Cache-Control", "X-Requested-With"],
 )
 
 
@@ -329,7 +329,26 @@ async def download_model(body: DownloadRequest, req: Request):
 
     async def generate():
         model_id = body.model_id.strip()
-        local_dir = MODELS_DIR / model_id.replace("/", "--")
+        import re as _re
+        # 1. 경로 순회 패턴 즉시 거부 (../ ..\\ 시퀀스)
+        if _re.search(r"\.\.[/\\]", model_id) or model_id in ("..", "."):
+            yield sse({"type": "download_error", "message": "Invalid model_id: path traversal detected"})
+            return
+        # 2. 슬래시를 이중 대시로 변환 (org/model → org--model)
+        safe_name = model_id.replace("/", "--").replace("\\", "--")
+        # 3. 영문자·숫자·하이픈·점·언더스코어만 허용
+        safe_name = _re.sub(r"[^\w\-.]", "", safe_name)
+        if not safe_name:
+            yield sse({"type": "download_error", "message": "Invalid model_id"})
+            return
+        # 4. MODELS_DIR 경계 이중 검사
+        candidate = (MODELS_DIR / safe_name).resolve()
+        try:
+            candidate.relative_to(MODELS_DIR.resolve())
+        except ValueError:
+            yield sse({"type": "download_error", "message": "Path traversal detected"})
+            return
+        local_dir = candidate
         local_dir.mkdir(parents=True, exist_ok=True)
 
         loop = asyncio.get_running_loop()
@@ -466,16 +485,12 @@ def list_conversations():
 
 @app.get("/api/conversations/{session_id}")
 def get_conversation(session_id: str):
-    """특정 세션의 모든 턴 + 에이전트 출력 반환."""
+    """특정 세션의 모든 턴 + 에이전트 출력 반환 (단일 JOIN 쿼리)."""
     session = crud.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
-    turns = crud.list_turns(session_id)
-    result = []
-    for turn in turns:
-        outputs = crud.list_agent_outputs(turn["id"])
-        result.append({**turn, "agent_outputs": outputs})
-    return {"session": session, "turns": result}
+    turns = crud.list_turns_with_outputs(session_id)  # N+1 → 단일 쿼리
+    return {"session": session, "turns": turns}
 
 
 @app.delete("/api/conversations/{session_id}")
@@ -514,6 +529,65 @@ def delete_run(run_id: int):
         raise HTTPException(status_code=404, detail=f"Run #{run_id} not found")
     crud.delete_run(run_id)
     return {"ok": True}
+
+
+# ─── MCP (Phase 20) ───────────────────────────────────────────────────────────
+
+class McpServerCreate(BaseModel):
+    id: str
+    name: str
+    transport: str           # stdio | sse
+    command: Optional[str] = None
+    url: Optional[str] = None
+
+
+@app.get("/api/mcp/servers")
+def list_mcp_servers():
+    """등록된 MCP 서버 목록."""
+    from mcp.registry import list_servers
+    return {"servers": list_servers()}
+
+
+@app.post("/api/mcp/servers", status_code=201)
+def create_mcp_server(body: McpServerCreate):
+    """MCP 서버 등록."""
+    from mcp.registry import create_server, get_server
+    if get_server(body.id):
+        raise HTTPException(status_code=409, detail=f"Server '{body.id}' already exists")
+    server = create_server(body.id, body.name, body.transport, body.command, body.url)
+    return {"ok": True, "server": server}
+
+
+@app.delete("/api/mcp/servers/{server_id}")
+def delete_mcp_server(server_id: str):
+    """MCP 서버 제거."""
+    from mcp.registry import delete_server
+    if server_id == "duckduckgo-builtin":
+        raise HTTPException(status_code=400, detail="Cannot delete built-in server")
+    ok = delete_server(server_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Server '{server_id}' not found")
+    return {"ok": True}
+
+
+@app.post("/api/mcp/servers/{server_id}/test")
+async def test_mcp_server(server_id: str):
+    """MCP 서버 연결 테스트 + 도구 목록 조회."""
+    from mcp.registry import test_server
+    result = await test_server(server_id)
+    return result
+
+
+@app.get("/api/mcp/tools")
+async def list_mcp_tools():
+    """모든 활성 MCP 서버의 통합 도구 목록."""
+    from mcp.registry import list_all_tools
+    tools = await list_all_tools()
+    # builtin 항상 포함
+    builtin = [{"name": "web_search", "description": "DuckDuckGo 웹 검색 (내장)", "server_id": "duckduckgo-builtin"}]
+    return {
+        "tools": builtin + [{"name": t.name, "description": t.description, "server_id": t.server_id} for t in tools]
+    }
 
 
 # ─── RAG (Phase 22) ───────────────────────────────────────────────────────────
@@ -584,6 +658,248 @@ async def rag_upload(
                 tmp_path.unlink(missing_ok=True)
             except Exception:
                 pass
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
+# ─── Agent Evals (Phase 23) ───────────────────────────────────────────────────
+
+class EvalSetCreate(BaseModel):
+    name: str
+
+
+class EvalCaseCreate(BaseModel):
+    question: str
+    expected: str = ""
+    metrics: list[str] = ["answer_relevance", "completeness", "conciseness"]
+
+
+class EvalRunRequest(BaseModel):
+    eval_set_id: str
+    run_label: str = ""
+    provider: str = "simulation"
+
+
+@app.get("/api/evals/sets")
+def list_eval_sets():
+    """평가 세트 목록 반환."""
+    from evals.runner import list_eval_sets as _list
+    return {"eval_sets": _list()}
+
+
+@app.post("/api/evals/sets", status_code=201)
+def create_eval_set_endpoint(body: EvalSetCreate):
+    """평가 세트 생성."""
+    from evals.runner import create_eval_set
+    result = create_eval_set(body.name)
+    return result
+
+
+@app.get("/api/evals/sets/{eval_set_id}/cases")
+def list_eval_cases_endpoint(eval_set_id: str):
+    """평가 케이스 목록."""
+    from evals.runner import list_eval_cases
+    return {"cases": list_eval_cases(eval_set_id)}
+
+
+@app.post("/api/evals/sets/{eval_set_id}/cases", status_code=201)
+def add_eval_case_endpoint(eval_set_id: str, body: EvalCaseCreate):
+    """평가 케이스 추가."""
+    from evals.runner import add_eval_case
+    case_id = add_eval_case(eval_set_id, body.question, body.expected, body.metrics)
+    return {"id": case_id}
+
+
+@app.delete("/api/evals/cases/{case_id}")
+def delete_eval_case_endpoint(case_id: int):
+    """평가 케이스 삭제."""
+    from evals.runner import delete_eval_case
+    delete_eval_case(case_id)
+    return {"ok": True}
+
+
+@app.get("/api/evals/results")
+def list_eval_results_endpoint(eval_set_id: Optional[str] = None, limit: int = 20):
+    """평가 결과 목록."""
+    from evals.runner import list_eval_results
+    return {"results": list_eval_results(eval_set_id, limit)}
+
+
+@app.get("/api/evals/compare")
+def compare_eval_runs(run_a: int, run_b: int):
+    """두 평가 실행 비교."""
+    from evals.runner import compare_runs
+    return compare_runs(run_a, run_b)
+
+
+@app.post("/api/evals/run")
+async def run_eval_endpoint(body: EvalRunRequest, req: Request):
+    """평가 세트를 실행하고 SSE로 진행률 스트리밍."""
+    from evals.runner import run_eval
+
+    def sse(data: dict) -> str:
+        return f"data: {json.dumps(data)}\n\n"
+
+    async def generate():
+        try:
+            async for event in run_eval(body.eval_set_id, body.run_label, body.provider):
+                if await req.is_disconnected():
+                    break
+                yield sse(event)
+        except asyncio.CancelledError:
+            pass
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
+# ─── A2A Protocol (Phase 24) ──────────────────────────────────────────────────
+
+# ── 셀프 A2A 서버 엔드포인트 ────────────────────────────────────────────────
+
+@app.get("/a2a/.well-known/agent.json")
+def a2a_agent_card(req: Request):
+    """A2A Agent Card — 이 에이전트의 기능을 외부에 노출."""
+    from a2a.card import build_agent_card
+    base_url = str(req.base_url).rstrip("/")
+    return build_agent_card(base_url)
+
+
+@app.post("/a2a/tasks/send")
+async def a2a_tasks_send(payload: dict, req: Request):
+    """A2A 태스크 수신 및 실행 (SSE 스트리밍)."""
+    from a2a.server import handle_task_send
+
+    async def generate():
+        async for event in handle_task_send(payload):
+            if await req.is_disconnected():
+                break
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
+@app.get("/a2a/tasks/{task_id}")
+def a2a_get_task(task_id: str):
+    """A2A 태스크 상태 조회."""
+    from a2a.server import get_task
+    task = get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return task
+
+
+@app.get("/a2a/tasks")
+def a2a_list_tasks():
+    """실행된 A2A 태스크 목록."""
+    from a2a.server import list_tasks
+    return {"tasks": list_tasks()}
+
+
+@app.post("/a2a/tasks/{task_id}/cancel")
+def a2a_cancel_task(task_id: str):
+    """A2A 태스크 취소."""
+    from a2a.server import cancel_task
+    ok = cancel_task(task_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return {"ok": True}
+
+
+# ── 외부 A2A 에이전트 관리 ──────────────────────────────────────────────────
+
+class A2AAgentCreate(BaseModel):
+    id: str
+    name: str
+    url: str
+    description: str = ""
+
+
+@app.get("/api/a2a/agents")
+def list_external_agents():
+    """등록된 외부 A2A 에이전트 목록."""
+    from a2a.registry import list_a2a_agents
+    return {"agents": list_a2a_agents()}
+
+
+@app.post("/api/a2a/agents", status_code=201)
+def create_external_agent(body: A2AAgentCreate):
+    """외부 A2A 에이전트 등록."""
+    from a2a.registry import create_a2a_agent, get_a2a_agent
+    if get_a2a_agent(body.id):
+        raise HTTPException(status_code=409, detail=f"Agent '{body.id}' already exists")
+    agent = create_a2a_agent(body.id, body.name, body.url, body.description)
+    return {"ok": True, "agent": agent}
+
+
+@app.delete("/api/a2a/agents/{agent_id}")
+def delete_external_agent(agent_id: str):
+    """외부 A2A 에이전트 제거."""
+    from a2a.registry import delete_a2a_agent
+    ok = delete_a2a_agent(agent_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+    return {"ok": True}
+
+
+@app.post("/api/a2a/agents/{agent_id}/test")
+async def test_external_agent(agent_id: str):
+    """외부 A2A 에이전트 연결 테스트 + Agent Card 조회."""
+    from a2a.registry import get_a2a_agent, update_a2a_agent_skills
+    from a2a.client import test_agent_connection
+    agent = get_a2a_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+    result = await test_agent_connection(agent["url"])
+    if result.get("ok"):
+        update_a2a_agent_skills(agent_id, result.get("skills", []))
+    return result
+
+
+@app.post("/api/a2a/agents/{agent_id}/send")
+async def send_to_external_agent(agent_id: str, payload: dict, req: Request):
+    """외부 A2A 에이전트에게 태스크 전송 (SSE 스트리밍)."""
+    from a2a.registry import get_a2a_agent
+    from a2a.client import send_task
+    agent = get_a2a_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+
+    prompt = payload.get("prompt", "")
+    skill_id = payload.get("skill_id", "run_pipeline")
+    session_id = payload.get("session_id")
+
+    async def generate():
+        async for event in send_task(agent["url"], prompt, skill_id, session_id):
+            if await req.is_disconnected():
+                break
+            yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(
         generate(),

@@ -53,25 +53,34 @@ class OpenAICompatProvider(BaseProvider):
         }
 
         async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream(
-                "POST",
-                f"{self._base_url}/v1/chat/completions",
-                json=payload,
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data = line[6:].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                        content = chunk["choices"][0]["delta"].get("content", "")
-                        if content:
-                            yield content
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
+            try:
+                async with client.stream(
+                    "POST",
+                    f"{self._base_url}/v1/chat/completions",
+                    json=payload,
+                ) as resp:
+                    if resp.status_code >= 400:
+                        body = await resp.aread()
+                        raise RuntimeError(
+                            f"[{self._ptype}] HTTP {resp.status_code}: {body.decode('utf-8', errors='replace')[:200]}"
+                        )
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data = line[6:].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                            content = chunk["choices"][0]["delta"].get("content", "")
+                            if content:
+                                yield content
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            continue
+            except httpx.HTTPStatusError as e:
+                raise RuntimeError(f"[{self._ptype}] HTTP error: {e}") from e
+            except httpx.ConnectError as e:
+                raise RuntimeError(f"[{self._ptype}] Connection failed: {e}") from e
 
     async def health_check(self) -> bool:
         try:

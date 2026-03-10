@@ -36,6 +36,16 @@ export type ToolCallEvent = {
   agentId: string;
 };
 
+export type CodeExecResult = {
+  language: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  durationMs: number;
+  blocked: boolean;
+  timedOut: boolean;
+};
+
 export type AgentMetrics = {
   status: AgentStatus;
   tokens: number;
@@ -45,6 +55,7 @@ export type AgentMetrics = {
   output: string;
   provider: ProviderType;
   toolCalls: ToolCallEvent[];
+  codeExecs: CodeExecResult[];  // Phase 21
 };
 
 export type ParallelStageInfo = {
@@ -126,7 +137,7 @@ function defaultMetrics(): Record<string, AgentMetrics> {
   return Object.fromEntries(
     DEFAULT_AGENT_IDS.map((id) => [
       id,
-      { status: "idle", tokens: 0, tokensPerSec: 0, latencyMs: 0, vramGb: 0, output: "", provider: "simulation" as ProviderType, toolCalls: [] },
+      { status: "idle", tokens: 0, tokensPerSec: 0, latencyMs: 0, vramGb: 0, output: "", provider: "simulation" as ProviderType, toolCalls: [], codeExecs: [] },
     ])
   );
 }
@@ -205,6 +216,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     let abortController = new AbortController();
     let retryTimeout: ReturnType<typeof setTimeout> | null = null;
     let retryDelay = 2000;
+    const badgeTimers = new Set<ReturnType<typeof setTimeout>>();
 
     const handleModelEvent = (event: Record<string, unknown>) => {
       const type = event.type as string;
@@ -249,14 +261,16 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           };
         });
 
-        // 30초 후 NEW 배지 소멸
-        setTimeout(() => {
+        // 30초 후 NEW 배지 소멸 (cleanup 위해 timer ID 추적)
+        const timerId = setTimeout(() => {
+          badgeTimers.delete(timerId);
           setState((s) => {
             const next = new Set(s.newModelKeys);
             next.delete(key);
             return { ...s, newModelKeys: next };
           });
         }, 30_000);
+        badgeTimers.add(timerId);
       }
 
       if (type === "model_removed") {
@@ -320,6 +334,8 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     return () => {
       abortController.abort();
       if (retryTimeout) clearTimeout(retryTimeout);
+      badgeTimers.forEach(clearTimeout);
+      badgeTimers.clear();
     };
   }, []); // 마운트 시 1회만
 
@@ -398,6 +414,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         temperature: cfg.temperature,
         tools: activeTools.length > 0 ? activeTools : undefined,
         rag_collections: cfg.ragCollections && cfg.ragCollections.length > 0 ? cfg.ragCollections : undefined,
+        auto_execute: cfg.autoExecute ?? false,
       };
     });
 
@@ -460,6 +477,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
               status: "running",
               provider: (event.provider as ProviderType) ?? "simulation",
               toolCalls: [],
+              codeExecs: [],
             },
           },
         }));
@@ -498,10 +516,28 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         });
         break;
 
+      case "code_exec_done":
+        setState((s) => {
+          const id = event.agentId as string;
+          const prev = s.agentMetrics[id];
+          if (!prev) return s;
+          const execResult: CodeExecResult = {
+            language: (event.language as string) ?? "python",
+            stdout: (event.stdout as string) ?? "",
+            stderr: (event.stderr as string) ?? "",
+            exitCode: (event.exitCode as number) ?? 0,
+            durationMs: (event.durationMs as number) ?? 0,
+            blocked: (event.blocked as boolean) ?? false,
+            timedOut: (event.timedOut as boolean) ?? false,
+          };
+          return { ...s, agentMetrics: { ...s.agentMetrics, [id]: { ...prev, codeExecs: [...(prev.codeExecs ?? []), execResult] } } };
+        });
+        break;
+
       case "agent_token":
         setState((s) => {
           const id = event.agentId as string;
-          const prev = s.agentMetrics[id] ?? { status: "running", tokens: 0, tokensPerSec: 0, latencyMs: 0, vramGb: 0, output: "", provider: "simulation" as ProviderType, toolCalls: [] };
+          const prev = s.agentMetrics[id] ?? { status: "running", tokens: 0, tokensPerSec: 0, latencyMs: 0, vramGb: 0, output: "", provider: "simulation" as ProviderType, toolCalls: [], codeExecs: [] };
           return {
             ...s,
             agentMetrics: {

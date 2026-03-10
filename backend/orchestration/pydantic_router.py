@@ -77,7 +77,7 @@ def parse_router_output(output: str) -> Optional[RouterDecision]:
             decision = RouterDecision.model_validate_json(m.group(0))
             logger.debug(
                 "[pydantic_router] JSON OK: agents=%s reason=%r",
-                decision.target_agents, decision.reason[:80],
+                decision.target_agents, (decision.reason or "")[:80],
             )
             return decision
         except (ValidationError, ValueError, json.JSONDecodeError) as exc:

@@ -139,6 +139,38 @@ def init_db() -> None:
             )
         """)
 
+        # ── Phase 20: MCP 서버 레지스트리 ─────────────────────────────────────────
+        from mcp.registry import init_mcp_table
+        init_mcp_table(conn)
+
+        # ── Phase 23: Agent Evals ──────────────────────────────────────────────
+        from evals.runner import init_eval_tables
+        init_eval_tables(conn)
+
+        # ── Phase 24: A2A 에이전트 레지스트리 ─────────────────────────────────
+        from a2a.registry import init_a2a_table
+        init_a2a_table(conn)
+
+        # ── 성능 인덱스 (IF NOT EXISTS — 재시작 시 자동 적용) ─────────────────
+        _INDEX_STATEMENTS = [
+            # 대화 턴: session_id 필터
+            "CREATE INDEX IF NOT EXISTS idx_conv_turns_session ON conversation_turns(session_id)",
+            # 에이전트 출력: turn_id 필터
+            "CREATE INDEX IF NOT EXISTS idx_agent_outputs_turn ON agent_outputs(turn_id)",
+            # 파이프라인 실행: 최신순 정렬
+            "CREATE INDEX IF NOT EXISTS idx_pipeline_runs_created ON pipeline_runs(created_at DESC)",
+            # eval 점수: run_id 필터
+            "CREATE INDEX IF NOT EXISTS idx_eval_scores_run ON eval_scores(run_id)",
+            # eval 케이스: eval_set_id 필터
+            "CREATE INDEX IF NOT EXISTS idx_eval_cases_set ON eval_cases(eval_set_id)",
+            # eval 실행: eval_set_id 필터
+            "CREATE INDEX IF NOT EXISTS idx_eval_runs_set ON eval_runs(eval_set_id)",
+            # MCP 서버: enabled 필터
+            "CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled ON mcp_servers(enabled)",
+        ]
+        for stmt in _INDEX_STATEMENTS:
+            conn.execute(stmt)
+
         count = conn.execute("SELECT COUNT(*) as c FROM agent_registry").fetchone()["c"]
         if count == 0:
             seed_agents = [
