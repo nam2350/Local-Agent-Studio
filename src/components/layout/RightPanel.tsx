@@ -247,6 +247,105 @@ function ToolCallBadge({ tool, input, output }: { tool: string; input: Record<st
   );
 }
 
+// ─── Sandbox status bar ───────────────────────────────────────────────────────
+
+function SandboxStatusBar() {
+  const [status, setStatus] = useState<{ exists: boolean; env_name: string; package_count: number } | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [pkgInput, setPkgInput] = useState("");
+  const [installing, setInstalling] = useState(false);
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const r = await fetch(`${BACKEND}/api/sandbox/status`);
+      if (r.ok) setStatus(await r.json());
+    } catch { /* offline */ }
+  }, []);
+
+  useEffect(() => { fetchStatus(); }, [fetchStatus]);
+
+  const handleReset = async () => {
+    if (!window.confirm("샌드박스 환경을 초기화하시겠습니까? 설치된 패키지가 모두 삭제됩니다.")) return;
+    setResetting(true);
+    try {
+      await fetch(`${BACKEND}/api/sandbox/reset`, { method: "POST" });
+      await fetchStatus();
+    } catch { /* ignore */ }
+    setResetting(false);
+  };
+
+  const handleInstall = async () => {
+    const pkg = pkgInput.trim();
+    if (!pkg || installing) return;
+    setInstalling(true);
+    try {
+      const r = await fetch(`${BACKEND}/api/sandbox/install`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ package: pkg }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        setPkgInput("");
+        await fetchStatus();
+      } else {
+        alert(`설치 실패: ${d.error || "unknown"}`);
+      }
+    } catch { /* ignore */ }
+    setInstalling(false);
+  };
+
+  if (!status) return null;
+
+  return (
+    <div className="flex flex-col gap-1 mt-1.5">
+      <div
+        className="flex items-center justify-between px-2.5 py-1.5 rounded-lg"
+        style={{ background: "rgba(11,16,37,0.5)", border: "1px solid rgba(255,255,255,0.04)" }}
+      >
+        <div className="flex items-center gap-1.5">
+          <div
+            className="w-1.5 h-1.5 rounded-full"
+            style={{ background: status.exists ? "#10b981" : "#f59e0b" }}
+          />
+          <span className="text-[8px] font-mono text-cyber-muted">
+            {status.env_name}
+          </span>
+          <span className="text-[8px] text-cyber-subtle">
+            {status.exists ? `${status.package_count} pkgs` : "not created"}
+          </span>
+        </div>
+        <button
+          onClick={handleReset}
+          disabled={resetting}
+          className="text-[8px] text-cyber-subtle hover:text-cyber-muted transition-colors disabled:opacity-40"
+        >
+          {resetting ? "..." : "Reset"}
+        </button>
+      </div>
+      {/* 패키지 설치 입력 */}
+      <div className="flex gap-1">
+        <input
+          value={pkgInput}
+          onChange={(e) => setPkgInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleInstall()}
+          placeholder="pip install (sandbox only)"
+          className="flex-1 text-[8px] font-mono px-2 py-1 rounded outline-none text-cyber-text"
+          style={{ background: "rgba(11,16,37,0.5)", border: "1px solid rgba(255,255,255,0.04)" }}
+        />
+        <button
+          onClick={handleInstall}
+          disabled={installing || !pkgInput.trim()}
+          className="text-[8px] px-2 py-1 rounded font-mono transition-all disabled:opacity-30"
+          style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", color: "#10b981" }}
+        >
+          {installing ? "..." : "Install"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Output viewer ────────────────────────────────────────────────────────────
 
 function OutputPanel() {
@@ -363,6 +462,9 @@ function OutputPanel() {
           </p>
         )}
       </div>
+
+      {/* Sandbox 환경 상태 */}
+      <SandboxStatusBar />
     </div>
   );
 }

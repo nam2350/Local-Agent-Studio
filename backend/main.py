@@ -149,6 +149,32 @@ def delete_agent_endpoint(agent_id: str):
     return {"ok": True}
 
 
+# ─── Sandbox Management (Phase 21) ───────────────────────────────────────────
+
+@app.get("/api/sandbox/status")
+def sandbox_status():
+    """sandbox-executor 환경 상태 조회."""
+    from sandbox.executor import get_sandbox_status
+    return get_sandbox_status()
+
+
+@app.post("/api/sandbox/reset")
+def sandbox_reset():
+    """sandbox-executor 환경 삭제 후 재생성."""
+    from sandbox.executor import reset_sandbox_env
+    return reset_sandbox_env()
+
+
+class SandboxInstallRequest(BaseModel):
+    package: str
+
+@app.post("/api/sandbox/install")
+def sandbox_install(body: SandboxInstallRequest):
+    """sandbox-executor 환경에 패키지 설치."""
+    from sandbox.executor import install_package
+    return install_package(body.package)
+
+
 # ─── Pipeline CRUD ────────────────────────────────────────────────────────────
 
 class PipelineSaveRequest(BaseModel):

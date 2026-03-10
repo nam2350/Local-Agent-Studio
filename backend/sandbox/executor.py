@@ -6,10 +6,12 @@ import ast as _ast
 import asyncio
 import logging
 import re
+import subprocess
 import sys
 import textwrap
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import AsyncGenerator, Optional
 
 logger = logging.getLogger(__name__)
@@ -18,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 TIMEOUT_SEC = 30
 MAX_OUTPUT_BYTES = 32_768  # 32 KB
+
+SANDBOX_ENV_NAME = "sandbox-executor"
+CONDA_EXE = Path("D:/miniconda3/condabin/conda.bat")
+SANDBOX_PYTHON = Path(f"D:/miniconda3/envs/{SANDBOX_ENV_NAME}/python.exe")
 
 # 위험 패턴 (실행 전 거부)
 _BLOCKED_PATTERNS = [
@@ -34,6 +40,98 @@ _BLOCKED_PATTERNS = [
     r"compile\s*\(",
 ]
 _BLOCKED_RE = re.compile("|".join(_BLOCKED_PATTERNS), re.IGNORECASE)
+
+
+# ─── Sandbox 환경 관리 ────────────────────────────────────────────────────────
+
+def _env_exists() -> bool:
+    """sandbox-executor Conda 환경이 존재하는지 확인."""
+    return SANDBOX_PYTHON.exists()
+
+
+def ensure_sandbox_env() -> bool:
+    """sandbox-executor 환경이 없으면 자동 생성. 성공 시 True 반환."""
+    if _env_exists():
+        return True
+    logger.info("[Sandbox] Creating Conda env '%s' ...", SANDBOX_ENV_NAME)
+    try:
+        result = subprocess.run(
+            [str(CONDA_EXE), "create", "-n", SANDBOX_ENV_NAME, "python=3.12", "-y", "--quiet"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode != 0:
+            logger.error("[Sandbox] env creation failed: %s", result.stderr[:500])
+            return False
+        logger.info("[Sandbox] Conda env '%s' created successfully.", SANDBOX_ENV_NAME)
+        return True
+    except Exception as e:
+        logger.error("[Sandbox] env creation error: %s", e)
+        return False
+
+
+def get_sandbox_python() -> str:
+    """샌드박스 Python 경로 반환. 환경 없으면 sys.executable fallback."""
+    if _env_exists():
+        return str(SANDBOX_PYTHON)
+    if ensure_sandbox_env() and _env_exists():
+        return str(SANDBOX_PYTHON)
+    logger.warning("[Sandbox] Falling back to sys.executable — sandbox env not available")
+    return sys.executable
+
+
+def get_sandbox_status() -> dict:
+    """샌드박스 환경 상태 조회."""
+    exists = _env_exists()
+    packages: list[str] = []
+    if exists:
+        try:
+            result = subprocess.run(
+                [str(SANDBOX_PYTHON), "-m", "pip", "list", "--format=freeze"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode == 0:
+                packages = [line.split("==")[0] for line in result.stdout.strip().splitlines() if "==" in line]
+        except Exception:
+            pass
+    return {
+        "env_name": SANDBOX_ENV_NAME,
+        "exists": exists,
+        "python_path": str(SANDBOX_PYTHON) if exists else None,
+        "package_count": len(packages),
+        "packages": packages[:50],  # 상위 50개만
+    }
+
+
+def reset_sandbox_env() -> dict:
+    """샌드박스 환경을 삭제 후 재생성."""
+    if _env_exists():
+        try:
+            subprocess.run(
+                [str(CONDA_EXE), "env", "remove", "-n", SANDBOX_ENV_NAME, "-y", "--quiet"],
+                capture_output=True, text=True, timeout=60,
+            )
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+    ok = ensure_sandbox_env()
+    return {"ok": ok, "env_name": SANDBOX_ENV_NAME}
+
+
+def install_package(package_name: str) -> dict:
+    """샌드박스 환경에 패키지 설치."""
+    python = get_sandbox_python()
+    try:
+        result = subprocess.run(
+            [python, "-m", "pip", "install", package_name, "--quiet"],
+            capture_output=True, text=True, timeout=60,
+        )
+        return {
+            "ok": result.returncode == 0,
+            "package": package_name,
+            "output": result.stdout[:500],
+            "error": result.stderr[:300] if result.returncode != 0 else "",
+        }
+    except Exception as e:
+        return {"ok": False, "package": package_name, "error": str(e)}
 
 
 @dataclass
@@ -147,12 +245,112 @@ def _security_check(code: str) -> Optional[str]:
         return "Blocked (AST): " + "; ".join(visitor.violations)
 
     return None
+# ─── 자동 패키지 감지 및 설치 ──────────────────────────────────────────────────
+
+# Python 표준 라이브러리 (설치 불필요)
+_STDLIB_MODULES = {
+    "abc", "aifc", "argparse", "array", "ast", "asyncio", "atexit", "base64",
+    "bisect", "builtins", "calendar", "cgi", "cgitb", "chunk", "cmath",
+    "codecs", "collections", "colorsys", "compileall", "concurrent",
+    "configparser", "contextlib", "contextvars", "copy", "copyreg", "cProfile",
+    "csv", "ctypes", "curses", "dataclasses", "datetime", "dbm", "decimal",
+    "difflib", "dis", "distutils", "doctest", "email", "encodings", "enum",
+    "errno", "faulthandler", "fcntl", "filecmp", "fileinput", "fnmatch",
+    "fractions", "ftplib", "functools", "gc", "getopt", "getpass", "gettext",
+    "glob", "graphlib", "grp", "gzip", "hashlib", "heapq", "hmac", "html",
+    "http", "idlelib", "imaplib", "imghdr", "imp", "importlib", "inspect",
+    "io", "ipaddress", "itertools", "json", "keyword", "lib2to3", "linecache",
+    "locale", "logging", "lzma", "mailbox", "mailcap", "marshal", "math",
+    "mimetypes", "mmap", "modulefinder", "multiprocessing", "netrc",
+    "numbers", "operator", "optparse", "os", "pathlib", "pdb", "pickle",
+    "pickletools", "pipes", "pkgutil", "platform", "plistlib", "poplib",
+    "posixpath", "pprint", "profile", "pstats", "pty", "pwd", "py_compile",
+    "pyclbr", "pydoc", "queue", "quopri", "random", "re", "readline",
+    "reprlib", "resource", "rlcompleter", "runpy", "sched", "secrets",
+    "select", "selectors", "shelve", "shlex", "shutil", "signal", "site",
+    "smtpd", "smtplib", "sndhdr", "socket", "socketserver", "sqlite3",
+    "ssl", "stat", "statistics", "string", "stringprep", "struct",
+    "subprocess", "sunau", "symtable", "sys", "sysconfig", "syslog",
+    "tabnanny", "tarfile", "tempfile", "termios", "test", "textwrap",
+    "threading", "time", "timeit", "tkinter", "token", "tokenize", "tomllib",
+    "trace", "traceback", "tracemalloc", "tty", "turtle", "turtledemo",
+    "types", "typing", "unicodedata", "unittest", "urllib", "uuid", "venv",
+    "warnings", "wave", "weakref", "webbrowser", "winreg", "winsound",
+    "wsgiref", "xdrlib", "xml", "xmlrpc", "zipapp", "zipfile", "zipimport",
+    "zlib", "_thread", "__future__",
+}
+
+# import 이름 → pip 패키지명 매핑 (다를 경우만)
+_IMPORT_TO_PIP = {
+    "cv2": "opencv-python",
+    "PIL": "Pillow",
+    "sklearn": "scikit-learn",
+    "skimage": "scikit-image",
+    "yaml": "pyyaml",
+    "bs4": "beautifulsoup4",
+    "attr": "attrs",
+    "dateutil": "python-dateutil",
+    "dotenv": "python-dotenv",
+    "gi": "PyGObject",
+}
 
 
-# ─── Python 실행 ──────────────────────────────────────────────────────────────
+def _extract_imports(code: str) -> set[str]:
+    """코드에서 최상위 모듈 이름 추출 (표준 라이브러리 + 차단 모듈 제외)."""
+    try:
+        tree = _ast.parse(code, mode="exec")
+    except SyntaxError:
+        return set()
+
+    modules: set[str] = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Import):
+            for alias in node.names:
+                modules.add(alias.name.split(".")[0])
+        elif isinstance(node, _ast.ImportFrom) and node.module:
+            modules.add(node.module.split(".")[0])
+
+    # 표준 라이브러리, 차단 모듈 제외
+    return modules - _STDLIB_MODULES - _BLOCKED_MODULES
+
+
+def _auto_install_missing(code: str) -> list[str]:
+    """코드에서 필요한 패키지를 감지하고, 누락된 것만 sandbox에 설치."""
+    required = _extract_imports(code)
+    if not required:
+        return []
+
+    python = get_sandbox_python()
+    installed: list[str] = []
+
+    for mod in required:
+        # sandbox 환경에서 import 가능한지 확인
+        try:
+            check = subprocess.run(
+                [python, "-c", f"import {mod}"],
+                capture_output=True, timeout=10,
+            )
+            if check.returncode == 0:
+                continue  # 이미 설치됨
+        except Exception:
+            pass
+
+        # pip 패키지 이름 결정
+        pip_name = _IMPORT_TO_PIP.get(mod, mod)
+        logger.info("[Sandbox] Auto-installing '%s' (pip: %s) ...", mod, pip_name)
+        result = install_package(pip_name)
+        if result.get("ok"):
+            installed.append(pip_name)
+        else:
+            logger.warning("[Sandbox] Failed to install '%s': %s", pip_name, result.get("error", ""))
+
+    return installed
+
+
+# ─── Python 실행 (sandbox-executor 환경) ──────────────────────────────────────
 
 async def _run_python(code: str) -> ExecResult:
-    """RestrictedPython 없이 subprocess 격리 실행."""
+    """sandbox-executor Conda 환경에서 격리 실행."""
     block_reason = _security_check(code)
     if block_reason:
         return ExecResult(
@@ -160,9 +358,13 @@ async def _run_python(code: str) -> ExecResult:
             duration_ms=0, language="python", blocked=True, block_reason=block_reason,
         )
 
-    # 코드를 임시 스크립트로 실행
+    # 누락 패키지 자동 감지 → sandbox 환경에만 설치
+    auto_installed = _auto_install_missing(code)
+    if auto_installed:
+        logger.info("[Sandbox] Auto-installed packages: %s", auto_installed)
+
     script = textwrap.dedent(code)
-    python_exe = sys.executable
+    python_exe = get_sandbox_python()
 
     start = time.time()
     try:
@@ -176,8 +378,12 @@ async def _run_python(code: str) -> ExecResult:
                 proc.communicate(), timeout=TIMEOUT_SEC
             )
             duration_ms = int((time.time() - start) * 1000)
+            # 자동 설치된 패키지 정보를 stdout 앞에 추가
+            install_note = ""
+            if auto_installed:
+                install_note = f"[Auto-installed: {', '.join(auto_installed)}]\n"
             return ExecResult(
-                stdout=stdout_b[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace"),
+                stdout=install_note + stdout_b[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace"),
                 stderr=stderr_b[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace"),
                 exit_code=proc.returncode or 0,
                 duration_ms=duration_ms,
