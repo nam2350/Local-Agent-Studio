@@ -46,7 +46,7 @@ next-env.d.ts
 
 # Documents
 PROJECT_PRD.md
-Agent.md
+AGENTS.md
 CLAUDE.md
 
 # Python / Backend

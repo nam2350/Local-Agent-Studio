@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePipeline, type ProviderType, type OrchestrationMode } from "@/context/PipelineContext";
+import { BACKEND } from "@/lib/config";
 import { useCallback } from "react";
 import SavePipelineModal from "@/components/modals/SavePipelineModal";
 import LoadPipelineModal from "@/components/modals/LoadPipelineModal";
@@ -70,7 +71,7 @@ export default function TopBar() {
       setUploadingImage(true);
       const formData = new FormData();
       formData.append("file", file);
-      const res = await fetch("http://localhost:8000/api/upload/image", {
+      const res = await fetch(`${BACKEND}/api/upload/image`, {
         method: "POST",
         body: formData,
       });

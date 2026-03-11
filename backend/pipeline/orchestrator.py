@@ -453,8 +453,8 @@ async def _run_single_agent(
                             sse_data = json.loads(token_text[8:])
                             sse_data["agentId"] = agent_id
                             yield sse(sse_data)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("[%s] SSE JSON parse failed: %s — raw: %s", agent_id, exc, token_text[:100])
                         continue
 
                     full_output += token_text
